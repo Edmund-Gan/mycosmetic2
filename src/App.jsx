@@ -491,7 +491,9 @@ const CosmeticSafetyApp = () => {
 
   // Show ingredient details modal
   const showIngredientDetails = (ingredientName) => {
-    const ingredient = ingredients.find(ing => ing.substance_detected === ingredientName);
+    const ingredient = ingredients.find(ing => 
+      (ing.substance_detected || ing.substance || '').toString().toUpperCase() === ingredientName.toString().toUpperCase()
+    );
     if (ingredient) {
       setSelectedIngredient(formatIngredient(ingredient));
       setShowIngredientModal(true);
@@ -704,7 +706,7 @@ const CosmeticSafetyApp = () => {
   };
 
   const formatIngredient = (ingredient) => ({
-    name: ingredient.substance_detected,
+    name: (ingredient.substance_detected || ingredient.substance || '').toString().toUpperCase(),
     risk: ingredient.risk_level?.toLowerCase() || 'medium',
     effects: ingredient.health_effect,
     commonName: ingredient.common_name,
@@ -2259,10 +2261,12 @@ const CosmeticSafetyApp = () => {
                 border: '1px solid #fecaca'
               }}>
                 {statusModalData.harmfulIngredients.map((ingredient, idx) => {
-                  const ingredientInfo = ingredients.find(ing => ing.substance_detected === ingredient);
+                  const ingredientInfo = ingredients.find(ing => 
+                    (ing.substance_detected || ing.substance || '').toString().toUpperCase() === ingredient.toString().toUpperCase()
+                  );
                   return (
                     <div key={idx} style={{ marginBottom: '8px' }}>
-                      <span style={{ fontWeight: '500', color: '#dc2626' }}>{ingredient}</span>
+                      <span style={{ fontWeight: '500', color: '#dc2626' }}>{ingredient.toString().toUpperCase()}</span>
                       {ingredientInfo && (
                         <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '2px' }}>
                           {ingredientInfo.health_effect}
@@ -2491,9 +2495,9 @@ const CosmeticSafetyApp = () => {
                     e.stopPropagation();
                     showIngredientDetails(ing);
                   }}
-                  title={`Click for details about ${ing}`}
+                  title={`Click for details about ${ing.toString().toUpperCase()}`}
                 >
-                  {ing}
+                  {ing.toString().toUpperCase()}
                   <Info style={{ width: '10px', height: '10px', marginLeft: '4px' }} />
                 </span>
               ))}
@@ -3729,7 +3733,9 @@ const CosmeticSafetyApp = () => {
                         <span className="harmful-title">Harmful Ingredients Detected</span>
                       </div>
                       {selectedProduct.harmfulIngredients.map((ingredient, idx) => {
-                        const ingredientInfo = ingredients.find(ing => ing.substance_detected === ingredient);
+                        const ingredientInfo = ingredients.find(ing => 
+                          (ing.substance_detected || ing.substance || '').toString().toUpperCase() === ingredient.toString().toUpperCase()
+                        );
                         return (
                           <div key={idx} style={{ marginBottom: '12px', padding: '12px', backgroundColor: 'white', borderRadius: '4px', border: '1px solid #fecaca' }}>
                             <div 
@@ -3746,7 +3752,7 @@ const CosmeticSafetyApp = () => {
                               }}
                               title="Click for detailed ingredient information"
                             >
-                              {ingredient} 
+                              {ingredient.toString().toUpperCase()} 
                               <Info style={{ width: '12px', height: '12px', marginLeft: '4px', display: 'inline' }} />
                             </div>
                             {ingredientInfo && (
