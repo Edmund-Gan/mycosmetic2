@@ -168,7 +168,7 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
-// Real-time search with suggestions
+// FIXED: Real-time search with suggestions
 app.get('/api/search/realtime', async (req, res) => {
   const { query, limit = 10 } = req.query;
   
@@ -181,15 +181,21 @@ app.get('/api/search/realtime', async (req, res) => {
     console.log('Real-time search for:', query);
     
     const expandedTerms = expandSearchQuery(query);
-    const searchConditions = expandedTerms.map((term, index) => {
-      return `(p.product ILIKE ${index * 3 + 1} OR c.company_name ILIKE ${index * 3 + 2} OR p.notif_no ILIKE ${index * 3 + 3})`;
-    }).join(' OR ');
     
+    // Build parameters array first
     const params = [];
     expandedTerms.forEach(term => {
       params.push(`%${term}%`, `%${term}%`, `%${term}%`);
     });
-    params.push(parseInt(limit));
+    params.push(parseInt(limit)); // Add limit as last parameter
+    
+    // Build search conditions with proper parameter placeholders
+    const searchConditions = expandedTerms.map((term, index) => {
+      const baseIndex = index * 3;
+      return `(p.product ILIKE $${baseIndex + 1} OR c.company_name ILIKE $${baseIndex + 2} OR p.notif_no ILIKE $${baseIndex + 3})`;
+    }).join(' OR ');
+    
+    const limitParam = `$${params.length}`; // Use the correct parameter number for LIMIT
 
     const result = await client.query(`
       SELECT p.notif_no, p.date_notif, p.status, p.product, p.category,
@@ -198,7 +204,7 @@ app.get('/api/search/realtime', async (req, res) => {
       JOIN companies c ON p.company_id = c.company_id
       WHERE ${searchConditions}
       ORDER BY p.date_notif DESC
-      LIMIT ${params.length}
+      LIMIT ${limitParam}
     `, params);
     
     const resultsWithSimilarity = result.rows.map(product => ({
@@ -224,7 +230,7 @@ app.get('/api/search/realtime', async (req, res) => {
   }
 });
 
-// Enhanced search with substances
+// FIXED: Enhanced search with substances (using direct database calls instead of HTTP)
 app.get('/api/search/enhanced', async (req, res) => {
   const { query } = req.query;
   
@@ -232,36 +238,74 @@ app.get('/api/search/enhanced', async (req, res) => {
     return res.json([]);
   }
 
+  const client = await pool.connect();
   try {
     console.log('Enhanced search for:', query);
     
-    // Get initial search results
-    const searchResponse = await fetch(`http://localhost:${PORT}/api/search/realtime?query=${encodeURIComponent(query)}&limit=200`);
-    let products = await searchResponse.json();
+    // Get search results directly from database (instead of HTTP call)
+    const expandedTerms = expandSearchQuery(query);
     
-    if (!products || products.length === 0) {
+    // Build parameters array
+    const params = [];
+    expandedTerms.forEach(term => {
+      params.push(`%${term}%`, `%${term}%`, `%${term}%`);
+    });
+    params.push(200); // limit
+    
+    // Build search conditions with proper parameter placeholders
+    const searchConditions = expandedTerms.map((term, index) => {
+      const baseIndex = index * 3;
+      return `(p.product ILIKE $${baseIndex + 1} OR c.company_name ILIKE $${baseIndex + 2} OR p.notif_no ILIKE $${baseIndex + 3})`;
+    }).join(' OR ');
+    
+    const limitParam = `$${params.length}`;
+
+    const result = await client.query(`
+      SELECT p.notif_no, p.date_notif, p.status, p.product, p.category,
+             c.company_name as company, c.reliability_score
+      FROM categorized_products p
+      JOIN companies c ON p.company_id = c.company_id
+      WHERE ${searchConditions}
+      ORDER BY p.date_notif DESC
+      LIMIT ${limitParam}
+    `, params);
+    
+    if (!result.rows || result.rows.length === 0) {
       console.log('No products found for query:', query);
       return res.json([]);
     }
     
-    // For cancelled products, get their harmful substances
+    // For each product, if cancelled, get harmful substances
     const enhancedProducts = await Promise.all(
-      products.map(async (product) => {
+      result.rows.map(async (product) => {
         if (product.status === 'cancelled') {
           try {
-            const substanceResponse = await fetch(`http://localhost:${PORT}/api/substances/product/${product.notif_no}`);
-            const harmfulSubstances = await substanceResponse.json();
+            // Get harmful substances for cancelled products
+            const substanceResult = await client.query(`
+              SELECT s.substance
+              FROM cancelled_product_substances cps
+              JOIN substances s ON cps.substance_id = s.substance_id
+              WHERE cps.notif_no = $1
+            `, [product.notif_no]);
             
-            const cancelledResponse = await fetch(`http://localhost:${PORT}/api/cancelled/${product.notif_no}`);
-            const cancelledInfo = await cancelledResponse.json();
+            // Get cancelled product info
+            const cancelledResult = await client.query(`
+              SELECT manufacturer
+              FROM cancelled_products
+              WHERE notif_no = $1
+            `, [product.notif_no]);
             
             return {
               ...product,
-              harmful_ingredients: harmfulSubstances.map(s => s.substance),
-              manufacturer: cancelledInfo?.manufacturer
+              harmful_ingredients: substanceResult.rows.map(s => s.substance),
+              manufacturer: cancelledResult.rows[0]?.manufacturer
             };
           } catch (err) {
             console.warn(`No cancelled product info for ${product.notif_no}`);
+            return {
+              ...product,
+              harmful_ingredients: []
+            };
           }
         }
         return {
@@ -276,6 +320,8 @@ app.get('/api/search/enhanced', async (req, res) => {
   } catch (error) {
     console.error('Enhanced search failed:', error);
     res.status(500).json({ error: 'Enhanced search failed', details: error.message });
+  } finally {
+    client.release();
   }
 });
 
