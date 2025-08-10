@@ -46,6 +46,12 @@ app.use(cors({
       return callback(null, true);
     }
     
+    // Allow Vercel domains in production
+    if (origin.includes('vercel.app') || origin.includes('vercel.com')) {
+      console.log('CORS: Vercel origin allowed:', origin);
+      return callback(null, true);
+    }
+    
     console.warn('CORS: Origin not allowed:', origin);
     return callback(null, false);
   },
@@ -638,21 +644,26 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`CosmeticGuard API server running on http://localhost:${PORT}`);
-  console.log(`Health check: http://localhost:${PORT}/api/health`);
-});
+// Start server (only in development)
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`CosmeticGuard API server running on http://localhost:${PORT}`);
+    console.log(`Health check: http://localhost:${PORT}/api/health`);
+  });
 
-// Cleanup on process exit
-process.on('SIGINT', async () => {
-  console.log('\nShutting down server...');
-  await pool.end();
-  process.exit(0);
-});
+  // Cleanup on process exit
+  process.on('SIGINT', async () => {
+    console.log('\nShutting down server...');
+    await pool.end();
+    process.exit(0);
+  });
 
-process.on('SIGTERM', async () => {
-  console.log('\nShutting down server...');
-  await pool.end();
-  process.exit(0);
-});
+  process.on('SIGTERM', async () => {
+    console.log('\nShutting down server...');
+    await pool.end();
+    process.exit(0);
+  });
+}
+
+// Export for Vercel
+export default app;
