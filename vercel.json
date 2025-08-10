@@ -1,7 +1,5 @@
 {
   "version": 2,
-  "buildCommand": "npm run build",
-  "outputDirectory": "dist",
   "routes": [
     {
       "src": "/api/(.*)",
@@ -15,10 +13,5 @@
   "env": {
     "DATABASE_URL": "@database_url",
     "NODE_ENV": "production"
-  },
-  "functions": {
-    "backend/server.js": {
-      "maxDuration": 10
-    }
   }
 }
