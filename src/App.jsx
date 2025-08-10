@@ -608,13 +608,23 @@ const CosmeticSafetyApp = () => {
 
   // Show status explanation modal (AC1.2.3)
   const showStatusExplanation = (product) => {
-    // Always use selectedProduct if it's the same product to ensure consistency
-    let formattedProduct;
-    if (selectedProduct && selectedProduct.id === product.notif_no) {
-      formattedProduct = selectedProduct; // Reuse the already formatted product
-    } else {
-      formattedProduct = formatProduct(product);
+    // Clear cache for this specific product to ensure fresh data
+    const cacheKey = product.notif_no;
+    if (productCache.current.has(cacheKey)) {
+      productCache.current.delete(cacheKey);
+      console.log('Cleared cache for product:', cacheKey);
     }
+    
+    // Always format the clicked product to ensure we show the correct data
+    const formattedProduct = formatProduct(product);
+    
+    console.log('Status modal for product:', product.notif_no, 'Score:', formattedProduct.riskScore);
+    console.log('Original product data:', {
+      notif_no: product.notif_no,
+      product: product.product,
+      status: product.status,
+      reliability_score: product.reliability_score
+    });
     
     setStatusModalData({
       product: formattedProduct,
