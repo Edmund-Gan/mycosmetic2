@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Search, AlertTriangle, CheckCircle, XCircle, Shield, AlertCircle, Loader2, X, Mail, ExternalLink, Info, Filter, ArrowLeftRight, Bookmark, BookmarkCheck, ArrowUp, ArrowDown } from 'lucide-react';
-import { cosmetics } from './supabase';
+import { cosmetics } from './database';
 import './App.css';
 
 // Debounce function for search
@@ -98,9 +98,30 @@ const CosmeticSafetyApp = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(12); // Increased for better grid layouts
   
+  // Brand pagination state
+  const [brandCurrentPage, setBrandCurrentPage] = useState(1);
+  const [brandItemsPerPage] = useState(30); // 30 brands per page for better performance
+  
   // Responsive state variables
   const [viewportWidth, setViewportWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1280);
   const [paginationStrategy, setPaginationStrategy] = useState('adaptive'); // 'fixed', 'adaptive', 'smart'
+
+  // Debug function to track score consistency
+  const debugScoreConsistency = () => {
+    console.log('=== SCORE CONSISTENCY CHECK ===');
+    console.log('Selected Product Score:', selectedProduct?.riskScore);
+    console.log('Status Modal Score:', statusModalData?.riskScore);
+    
+    if (selectedProduct && statusModalData) {
+      if (selectedProduct.riskScore !== statusModalData.riskScore) {
+        console.error('❌ SCORE MISMATCH DETECTED!');
+        console.log('Selected Product:', selectedProduct);
+        console.log('Status Modal Data:', statusModalData);
+      } else {
+        console.log('✅ Scores are consistent');
+      }
+    }
+  };
 
   // Load initial data
   useEffect(() => {
@@ -143,6 +164,12 @@ const CosmeticSafetyApp = () => {
     try {
       setLoading(true);
       setError(null);
+      
+      // Clear product cache when loading new data
+      if (productCache.current) {
+        productCache.current.clear();
+        console.log('Product cache cleared');
+      }
       
       const productsData = await cosmetics.getProducts();
       setProducts(productsData || []);
@@ -264,6 +291,7 @@ const CosmeticSafetyApp = () => {
     setScoreCalculationData(null);
     setActualScoreBreakdown(null);
     setCurrentPage(1);
+    setBrandCurrentPage(1); // Reset brand pagination
     // Note: Filters are preserved to remember user preferences
     setShowFilters(false);
     setShowSavedAlternatives(false);
@@ -578,7 +606,14 @@ const CosmeticSafetyApp = () => {
 
   // Show status explanation modal (AC1.2.3)
   const showStatusExplanation = (product) => {
-    const formattedProduct = formatProduct(product);
+    // Always use selectedProduct if it's the same product to ensure consistency
+    let formattedProduct;
+    if (selectedProduct && selectedProduct.id === product.notif_no) {
+      formattedProduct = selectedProduct; // Reuse the already formatted product
+    } else {
+      formattedProduct = formatProduct(product);
+    }
+    
     setStatusModalData({
       product: formattedProduct,
       status: formattedProduct.status,
@@ -586,23 +621,53 @@ const CosmeticSafetyApp = () => {
       harmfulIngredients: formattedProduct.harmfulIngredients
     });
     setShowStatusModal(true);
+    
+    // Debug check
+    setTimeout(debugScoreConsistency, 100);
   };
+
+  // Product cache to ensure consistency
+  const productCache = React.useRef(new Map());
 
   // Convert database fields to display format
   const formatProduct = (product) => {
+    // Check cache first to ensure consistency
+    const cacheKey = product.notif_no;
+    if (productCache.current.has(cacheKey)) {
+      return productCache.current.get(cacheKey);
+    }
     
-    // Calculate risk score with proper validation and fallbacks
+    // Debug logging to track reliability score
+    console.log('Formatting product:', product.notif_no, {
+      reliability_score: product.reliability_score,
+      status: product.status
+    });
+    
+    // Calculate risk score with comprehensive field checking
     let riskScore = 0;
-    if (product.reliability_score !== null && product.reliability_score !== undefined && !isNaN(product.reliability_score)) {
-      riskScore = Math.round(Number(product.reliability_score) * 10) / 10; // Round to 1 decimal place
+    
+    // Check multiple possible field names for reliability score
+    const possibleScoreFields = [
+      product.reliability_score,
+      product.riskScore, 
+      product.risk_score,
+      product.score
+    ];
+    
+    const validScore = possibleScoreFields.find(score => 
+      score !== null && score !== undefined && !isNaN(score)
+    );
+    
+    if (validScore !== undefined) {
+      riskScore = Math.round(Number(validScore) * 10) / 10; // Round to 1 decimal place
+      console.log('Using database score:', riskScore, 'from field with value:', validScore);
     } else {
-      // Fallback scoring based on status with more nuanced scoring
+      // This should rarely happen if database always has reliability_score
+      console.warn('No valid reliability score found for product:', product.notif_no, 'using fallback');
       if (product.status?.toLowerCase() === 'approved') {
-        riskScore = Math.random() * 15 + 75; // 75-90 for approved products
-        riskScore = Math.round(riskScore * 10) / 10;
+        riskScore = 80.0; // Fixed fallback for approved
       } else if (product.status?.toLowerCase() === 'cancelled') {
-        riskScore = Math.random() * 25 + 15; // 15-40 for cancelled products
-        riskScore = Math.round(riskScore * 10) / 10;
+        riskScore = 30.0; // Fixed fallback for cancelled
       } else {
         riskScore = 50.0;
       }
@@ -621,9 +686,20 @@ const CosmeticSafetyApp = () => {
       category: product.category,
       riskScore: riskScore,
       lastUpdated: product.date_notif ? new Date(product.date_notif).toLocaleDateString() : 'Unknown',
-      manufacturer: product.manufacturer || product.company
+      manufacturer: product.manufacturer || product.company,
+      _originalProduct: product // Keep reference for debugging
     };
     
+    // Cache the formatted product with size limit
+    const MAX_CACHE_SIZE = 1000;
+    if (productCache.current.size >= MAX_CACHE_SIZE) {
+      // Remove oldest entries when cache gets too large
+      const firstKey = productCache.current.keys().next().value;
+      productCache.current.delete(firstKey);
+    }
+    productCache.current.set(cacheKey, formatted);
+    
+    console.log('Formatted product score:', riskScore);
     return formatted;
   };
 
@@ -815,6 +891,151 @@ const CosmeticSafetyApp = () => {
     }
     
     return pageNumbers;
+  };
+
+  // Brand pagination functions
+  const getBrandPaginatedResults = () => {
+    const filteredBrands = getFilteredAndSortedBrands();
+    const startIndex = (brandCurrentPage - 1) * brandItemsPerPage;
+    const endIndex = startIndex + brandItemsPerPage;
+    return filteredBrands.slice(startIndex, endIndex);
+  };
+
+  const getBrandTotalPages = () => {
+    const filteredBrands = getFilteredAndSortedBrands();
+    return Math.ceil(filteredBrands.length / brandItemsPerPage);
+  };
+
+  // Handle brand page change with smooth scrolling
+  const handleBrandPageChange = (pageNumber) => {
+    if (pageNumber >= 1 && pageNumber <= getBrandTotalPages() && pageNumber !== brandCurrentPage) {
+      setBrandCurrentPage(pageNumber);
+      
+      // Smooth scroll to brands section
+      setTimeout(() => {
+        const targetElement = document.querySelector('.brands-grid') || 
+                            document.querySelector('.brand-safety-content');
+        
+        if (targetElement) {
+          const yOffset = -100; // Offset for header and controls
+          const y = targetElement.getBoundingClientRect().top + window.pageYOffset + yOffset;
+          window.scrollTo({ top: y, behavior: 'smooth' });
+        }
+      }, 50);
+    }
+  };
+
+  // Get brand page numbers with mobile support
+  const getBrandPageNumbers = () => {
+    const totalPages = getBrandTotalPages();
+    const pageNumbers = [];
+    
+    // Adjust max visible pages based on screen size
+    const maxVisible = viewportWidth > 768 ? 7 : viewportWidth > 480 ? 5 : 3;
+    
+    if (totalPages <= maxVisible) {
+      for (let i = 1; i <= totalPages; i++) {
+        pageNumbers.push(i);
+      }
+    } else {
+      const halfVisible = Math.floor(maxVisible / 2);
+      
+      if (brandCurrentPage <= halfVisible + 1) {
+        // Near beginning
+        for (let i = 1; i <= maxVisible - 2; i++) pageNumbers.push(i);
+        pageNumbers.push('...');
+        pageNumbers.push(totalPages);
+      } else if (brandCurrentPage >= totalPages - halfVisible) {
+        // Near end
+        pageNumbers.push(1);
+        pageNumbers.push('...');
+        for (let i = totalPages - maxVisible + 3; i <= totalPages; i++) pageNumbers.push(i);
+      } else {
+        // In middle
+        pageNumbers.push(1);
+        pageNumbers.push('...');
+        for (let i = brandCurrentPage - 1; i <= brandCurrentPage + 1; i++) pageNumbers.push(i);
+        pageNumbers.push('...');
+        pageNumbers.push(totalPages);
+      }
+    }
+    
+    return pageNumbers;
+  };
+
+  // Brand Pagination Component
+  const BrandPaginationComponent = () => {
+    const totalPages = getBrandTotalPages();
+    const filteredBrandsLength = getFilteredAndSortedBrands().length;
+    const startIndex = (brandCurrentPage - 1) * brandItemsPerPage;
+    const endIndex = Math.min(startIndex + brandItemsPerPage, filteredBrandsLength);
+    
+    if (totalPages <= 1) return null;
+    
+    return (
+      <div className="pagination-container">
+        {/* Pagination info with responsive text */}
+        <div className="pagination-info">
+          <span>
+            Showing <strong>{startIndex + 1}-{endIndex}</strong> of <strong>{filteredBrandsLength}</strong> brands
+          </span>
+        </div>
+
+        {/* Pagination controls */}
+        <div className="pagination-controls">
+          {/* Previous Button */}
+          <button
+            className="pagination-button"
+            onClick={() => handleBrandPageChange(brandCurrentPage - 1)}
+            disabled={brandCurrentPage === 1}
+            aria-label="Previous page"
+          >
+            <ArrowUp style={{ width: '16px', height: '16px', transform: 'rotate(-90deg)' }} />
+            <span style={{ display: viewportWidth > 640 ? 'inline' : 'none' }}>Previous</span>
+          </button>
+
+          {/* Page Numbers */}
+          {getBrandPageNumbers().map((pageNum, idx) => (
+            <button
+              key={idx}
+              className={`pagination-button ${pageNum === brandCurrentPage ? 'active' : ''}`}
+              onClick={() => typeof pageNum === 'number' ? handleBrandPageChange(pageNum) : null}
+              disabled={pageNum === '...'}
+              aria-label={typeof pageNum === 'number' ? `Go to page ${pageNum}` : 'More pages'}
+            >
+              {pageNum === '...' ? (
+                '...'
+              ) : (
+                pageNum
+              )}
+            </button>
+          ))}
+
+          {/* Next Button */}
+          <button
+            className="pagination-button"
+            onClick={() => handleBrandPageChange(brandCurrentPage + 1)}
+            disabled={brandCurrentPage === totalPages}
+            aria-label="Next page"
+          >
+            <span style={{ display: viewportWidth > 640 ? 'inline' : 'none' }}>Next</span>
+            <ArrowUp style={{ width: '16px', height: '16px', transform: 'rotate(90deg)' }} />
+          </button>
+        </div>
+        
+        {/* Mobile page info */}
+        {viewportWidth <= 640 && (
+          <div style={{
+            marginTop: 'var(--spacing-base)',
+            fontSize: 'var(--font-xs)',
+            color: '#6b7280',
+            textAlign: 'center'
+          }}>
+            Page {brandCurrentPage} of {totalPages}
+          </div>
+        )}
+      </div>
+    );
   };
 
   // Loading component
@@ -2877,6 +3098,245 @@ const CosmeticSafetyApp = () => {
           </div>
         )}
 
+        {/* Ingredients Tab with Enhanced Information */}
+        {activeTab === 'ingredients' && (
+          <div>
+            <div className="section-header">
+              <h2 className="section-title">Harmful Ingredients Database</h2>
+              <p className="section-subtitle">
+                Learn about commonly banned substances in cosmetics and their health effects
+              </p>
+            </div>
+
+            {/* Ingredient Search and Sort Controls */}
+            <div style={{
+              backgroundColor: 'white',
+              border: '1px solid #d1d5db',
+              borderRadius: '8px',
+              padding: '20px',
+              marginBottom: '24px'
+            }}>
+              <div style={{ 
+                display: 'flex', 
+                gap: '16px', 
+                alignItems: 'center',
+                flexWrap: 'wrap'
+              }}>
+                {/* Ingredient Search */}
+                <div style={{ flex: '1', minWidth: '300px' }}>
+                  <label style={{ 
+                    display: 'block', 
+                    fontSize: '14px', 
+                    fontWeight: '500', 
+                    marginBottom: '6px' 
+                  }}>
+                    Search Ingredients
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <Search style={{
+                      position: 'absolute',
+                      left: '12px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      width: '20px',
+                      height: '20px',
+                      color: '#6b7280'
+                    }} />
+                    <input
+                      type="text"
+                      value={ingredientSearchQuery}
+                      onChange={(e) => setIngredientSearchQuery(e.target.value)}
+                      placeholder="e.g., mercury, hydroquinone, tretinoin..."
+                      style={{
+                        width: '100%',
+                        padding: '12px 12px 12px 44px',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '8px',
+                        fontSize: '14px',
+                        outline: 'none'
+                      }}
+                      onFocus={(e) => e.target.style.borderColor = '#9333ea'}
+                      onBlur={(e) => e.target.style.borderColor = '#d1d5db'}
+                    />
+                  </div>
+                </div>
+
+                {/* Sort Dropdown */}
+                <div style={{ minWidth: '200px' }}>
+                  <label style={{ 
+                    display: 'block', 
+                    fontSize: '14px', 
+                    fontWeight: '500', 
+                    marginBottom: '6px' 
+                  }}>
+                    Sort by
+                  </label>
+                  <select
+                    value={ingredientSortBy}
+                    onChange={(e) => setIngredientSortBy(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '12px',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      backgroundColor: 'white',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <option value="risk">Risk Level</option>
+                    <option value="name">Ingredient Name</option>
+                    <option value="bannedYear">Banned Year</option>
+                  </select>
+                </div>
+
+                {/* Sort Direction Toggle */}
+                <div>
+                  <label style={{ 
+                    display: 'block', 
+                    fontSize: '14px', 
+                    fontWeight: '500', 
+                    marginBottom: '6px' 
+                  }}>
+                    Order
+                  </label>
+                  <button
+                    onClick={() => setIngredientSortDirection(ingredientSortDirection === 'asc' ? 'desc' : 'asc')}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                      padding: '12px 16px',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      backgroundColor: 'white',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      minWidth: '120px'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.target.style.backgroundColor = '#f9fafb';
+                      e.target.style.borderColor = '#9333ea';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.target.style.backgroundColor = 'white';
+                      e.target.style.borderColor = '#d1d5db';
+                    }}
+                    title={`Currently sorting ${ingredientSortDirection === 'asc' ? 'ascending (low to high)' : 'descending (high to low)'}`}
+                  >
+                    {ingredientSortDirection === 'asc' ? (
+                      <>
+                        <ArrowUp style={{ width: '16px', height: '16px' }} />
+                        <span>Low to High</span>
+                      </>
+                    ) : (
+                      <>
+                        <ArrowDown style={{ width: '16px', height: '16px' }} />
+                        <span>High to Low</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+              
+              {/* Results Summary */}
+              <div style={{ marginTop: '16px', fontSize: '14px', color: '#6b7280' }}>
+                {ingredientSearchQuery ? (
+                  `Found ${getFilteredAndSortedIngredients().length} ingredients matching "${ingredientSearchQuery}"`
+                ) : (
+                  `Showing ${getFilteredAndSortedIngredients().length} total ingredients`
+                )}
+                {' • '}
+                Sorted by {ingredientSortBy.replace(/([A-Z])/g, ' $1').toLowerCase()} ({ingredientSortDirection === 'asc' ? 'low to high' : 'high to low'})
+              </div>
+            </div>
+
+            {loading ? <LoadingSpinner /> : (
+              <div className="ingredients-grid">
+                {getFilteredAndSortedIngredients().map((ingredient, idx) => {
+                  const formattedIngredient = formatIngredient(ingredient);
+                  return (
+                    <div key={idx} className="ingredient-card">
+                      <div className="ingredient-header">
+                        <h3 className="ingredient-name">{formattedIngredient.name}</h3>
+                        <span className={`risk-badge ${formattedIngredient.risk}`}>
+                          {formattedIngredient.risk === 'high' ? 'High Risk' : 
+                           formattedIngredient.risk === 'medium' ? 'Medium Risk' : 'Low Risk'}
+                        </span>
+                      </div>
+                      
+                      <div>
+                        <p className="ingredient-effects-label">Health Effects:</p>
+                        <p className="ingredient-effects">{formattedIngredient.effects}</p>
+                        
+                        {formattedIngredient.commonName && (
+                          <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '8px' }}>
+                            <strong>Also known as:</strong> {formattedIngredient.commonName}
+                          </p>
+                        )}
+                        
+                        {formattedIngredient.usage && (
+                          <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '8px' }}>
+                            <strong>Common usage:</strong> {formattedIngredient.usage}
+                          </p>
+                        )}
+
+                        {formattedIngredient.alternative && (
+                          <p style={{ fontSize: '12px', color: '#059669', marginTop: '8px' }}>
+                            <strong>Safer alternatives:</strong> {formattedIngredient.alternative}
+                          </p>
+                        )}
+
+                        {formattedIngredient.shortRisk && (
+                          <p style={{ fontSize: '12px', color: '#dc2626', marginTop: '8px' }}>
+                            <strong>Short-term risks:</strong> {formattedIngredient.shortRisk}
+                          </p>
+                        )}
+
+                        {formattedIngredient.longRisk && (
+                          <p style={{ fontSize: '12px', color: '#dc2626', marginTop: '8px' }}>
+                            <strong>Long-term risks:</strong> {formattedIngredient.longRisk}
+                          </p>
+                        )}
+
+                        {formattedIngredient.simpleExplanation && (
+                          <p style={{ fontSize: '12px', color: '#4b5563', marginTop: '8px', fontStyle: 'italic' }}>
+                            <strong>Simple explanation:</strong> {formattedIngredient.simpleExplanation}
+                          </p>
+                        )}
+
+                        {formattedIngredient.bannedYear && (
+                          <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '8px' }}>
+                            <strong>Banned since:</strong> {formattedIngredient.bannedYear}
+                          </p>
+                        )}
+                      </div>
+                      
+                      <div className="ingredient-footer">
+                        <p className="ingredient-note">
+                          <AlertTriangle style={{ display: 'inline', width: '12px', height: '12px', marginRight: '4px' }} />
+                          {formattedIngredient.banStatus || 'Banned by MOH Malaysia and multiple international health authorities'}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Empty State */}
+            {!loading && getFilteredAndSortedIngredients().length === 0 && (
+              <div style={{ textAlign: 'center', padding: '60px 20px' }}>
+                <Search style={{ width: '48px', height: '48px', color: '#d1d5db', margin: '0 auto 16px' }} />
+                <h3 style={{ color: '#6b7280', marginBottom: '8px', fontSize: '18px' }}>No ingredients found</h3>
+                <p style={{ color: '#9ca3af' }}>Try adjusting your search terms to find ingredients</p>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Brand Safety Tab */}
         {activeTab === 'brands' && (
           <div>
@@ -3039,165 +3499,55 @@ const CosmeticSafetyApp = () => {
             {loading && <LoadingSpinner />}
             
             {!loading && (
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))',
-                gap: '20px'
-              }}>
-                {getFilteredAndSortedBrands().map((brandStat) => {
-                  const formatted = formatBrandStat(brandStat);
-                  return (
-                    <div
-                      key={brandStat.brand}
-                      style={{
-                        backgroundColor: 'white',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '12px',
-                        padding: '20px',
-                        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
-                        transition: 'all 0.2s ease',
-                        cursor: 'default'
-                      }}
-                      onMouseEnter={(e) => {
-                        e.target.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)';
-                        e.target.style.transform = 'translateY(-2px)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.target.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.1)';
-                        e.target.style.transform = 'translateY(0)';
-                      }}
-                    >
-                      {/* Brand Header */}
-                      <div style={{ 
-                        display: 'flex', 
-                        justifyContent: 'space-between', 
-                        alignItems: 'flex-start',
-                        marginBottom: '16px'
-                      }}>
-                        <div style={{ flex: '1' }}>
-                          <h3 style={{ 
-                            fontSize: '18px', 
-                            fontWeight: '600', 
-                            margin: '0 0 4px 0',
-                            color: '#111827',
-                            wordBreak: 'break-word'
-                          }}>
-                            {formatted.brand}
-                          </h3>
-                        </div>
-                        <div style={{ marginLeft: '12px', flexShrink: 0 }}>
-                          {getBrandIcon(formatted.cancellationRate)}
-                        </div>
-                      </div>
+              <div>
+                {/* Brand Pagination - Top */}
+                <BrandPaginationComponent />
 
-                      {/* Stats Grid */}
-                      <div style={{
-                        display: 'grid',
-                        gridTemplateColumns: '1fr 1fr',
-                        gap: '12px',
-                        marginBottom: '16px'
-                      }}>
-                        <div style={{
-                          textAlign: 'center',
-                          padding: '12px',
-                          backgroundColor: '#f8fafc',
-                          borderRadius: '8px'
-                        }}>
-                          <div style={{ fontSize: '20px', fontWeight: '700', color: '#1e40af' }}>
-                            {formatted.totalProducts}
-                          </div>
-                          <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>
-                            Total Products
+                <div className="brands-grid">
+                  {getBrandPaginatedResults().map((brandStat) => {
+                    const formatted = formatBrandStat(brandStat);
+                    return (
+                      <div key={brandStat.brand} className="brand-card">
+                        {/* Brand Header */}
+                        <div className="brand-header">
+                          <h3 className="brand-name">{formatted.brand}</h3>
+                          <div className={`brand-icon ${getBrandRiskLevel(formatted.cancellationRate)}`}>
+                            {getBrandIcon(formatted.cancellationRate)}
                           </div>
                         </div>
-                        <div style={{
-                          textAlign: 'center',
-                          padding: '12px',
-                          backgroundColor: '#f0fdf4',
-                          borderRadius: '8px'
-                        }}>
-                          <div style={{ fontSize: '20px', fontWeight: '700', color: '#166534' }}>
-                            {formatted.approvedProducts}
-                          </div>
-                          <div style={{ fontSize: '12px', color: '#16803d', marginTop: '2px' }}>
-                            Approved
-                          </div>
-                        </div>
-                        <div style={{
-                          textAlign: 'center',
-                          padding: '12px',
-                          backgroundColor: '#fef2f2',
-                          borderRadius: '8px'
-                        }}>
-                          <div style={{ fontSize: '20px', fontWeight: '700', color: '#dc2626' }}>
-                            {formatted.cancelledProducts}
-                          </div>
-                          <div style={{ fontSize: '12px', color: '#b91c1c', marginTop: '2px' }}>
-                            Cancelled
-                          </div>
-                        </div>
-                        <div style={{
-                          textAlign: 'center',
-                          padding: '12px',
-                          backgroundColor: formatted.cancellationRate > 20 ? '#fef2f2' : 
-                                          formatted.cancellationRate > 10 ? '#fffbeb' : '#f0fdf4',
-                          borderRadius: '8px'
-                        }}>
-                          <div style={{ 
-                            fontSize: '20px', 
-                            fontWeight: '700', 
-                            color: formatted.cancellationRate > 20 ? '#dc2626' : 
-                                   formatted.cancellationRate > 10 ? '#d97706' : '#166534'
-                          }}>
-                            {formatted.cancellationRate.toFixed(1)}%
-                          </div>
-                          <div style={{ 
-                            fontSize: '12px', 
-                            color: formatted.cancellationRate > 20 ? '#b91c1c' : 
-                                   formatted.cancellationRate > 10 ? '#92400e' : '#16803d',
-                            marginTop: '2px'
-                          }}>
-                            Cancellation Rate
-                          </div>
-                        </div>
-                      </div>
 
-                      {/* Risk Assessment */}
-                      <div style={{
-                        padding: '12px',
-                        backgroundColor: formatted.cancellationRate > 20 ? '#fee2e2' : 
-                                        formatted.cancellationRate > 10 ? '#fef3c7' : '#dcfce7',
-                        border: `1px solid ${
-                          formatted.cancellationRate > 20 ? '#fecaca' : 
-                          formatted.cancellationRate > 10 ? '#fcd34d' : '#bbf7d0'
-                        }`,
-                        borderRadius: '8px'
-                      }}>
-                        <div style={{ 
-                          fontSize: '14px', 
-                          fontWeight: '500',
-                          color: formatted.cancellationRate > 20 ? '#991b1b' : 
-                                 formatted.cancellationRate > 10 ? '#92400e' : '#166534',
-                          marginBottom: '4px'
-                        }}>
-                          {formatted.cancellationRate > 20 ? '⚠️ High Risk Brand' : 
-                           formatted.cancellationRate > 10 ? '⚡ Medium Risk Brand' : '✅ Low Risk Brand'}
-                        </div>
-                        <div style={{ 
-                          fontSize: '12px', 
-                          color: formatted.cancellationRate > 20 ? '#7f1d1d' : 
-                                 formatted.cancellationRate > 10 ? '#78350f' : '#14532d'
-                        }}>
-                          {formatted.cancellationRate > 20 ? 
-                            'This brand has a high cancellation rate. Exercise caution when considering their products.' :
-                           formatted.cancellationRate > 10 ? 
-                            'This brand has a moderate cancellation rate. Research individual products carefully.' :
-                            'This brand has a good safety record with low cancellation rates.'}
+                        {/* Stats Grid */}
+                        <div className="brand-stats">
+                          <div className="brand-stat">
+                            <span className="brand-stat-label">Total Products</span>
+                            <span className="brand-stat-value">{formatted.totalProducts}</span>
+                          </div>
+                          <div className="brand-stat">
+                            <span className="brand-stat-label">Approved Products</span>
+                            <span className="brand-stat-value">{formatted.approvedProducts}</span>
+                          </div>
+                          <div className="brand-stat">
+                            <span className="brand-stat-label">Cancelled Products</span>
+                            <span className="brand-stat-value cancelled">{formatted.cancelledProducts}</span>
+                          </div>
+                          
+                          {/* Cancellation Rate */}
+                          <div className="brand-cancellation-rate">
+                            <div className="cancellation-rate-header">
+                              <span className="cancellation-rate-label">Cancellation Rate</span>
+                              <span className={`cancellation-rate-value ${getBrandRiskLevel(formatted.cancellationRate).replace('-risk', '')}`}>
+                                {formatted.cancellationRate.toFixed(1)}%
+                              </span>
+                            </div>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
+
+                {/* Brand Pagination - Bottom */}
+                <BrandPaginationComponent />
               </div>
             )}
 
@@ -3444,298 +3794,6 @@ const CosmeticSafetyApp = () => {
             )}
           </div>
         )}
-
-        {/* Ingredients Tab with Enhanced Information */}
-        {activeTab === 'ingredients' && (
-          <div>
-            <div className="section-header">
-              <h2 className="section-title">Harmful Ingredients Database</h2>
-              <p className="section-subtitle">
-                Learn about commonly banned substances in cosmetics and their health effects
-              </p>
-            </div>
-
-            {/* Ingredient Search and Sort Controls */}
-            <div style={{
-              backgroundColor: 'white',
-              border: '1px solid #d1d5db',
-              borderRadius: '8px',
-              padding: '20px',
-              marginBottom: '24px'
-            }}>
-              <div style={{ 
-                display: 'flex', 
-                gap: '16px', 
-                alignItems: 'center',
-                flexWrap: 'wrap'
-              }}>
-                {/* Ingredient Search */}
-                <div style={{ flex: '1', minWidth: '300px' }}>
-                  <label style={{ 
-                    display: 'block', 
-                    fontSize: '14px', 
-                    fontWeight: '500', 
-                    marginBottom: '6px' 
-                  }}>
-                    Search Ingredients
-                  </label>
-                  <div style={{ position: 'relative' }}>
-                    <Search style={{
-                      position: 'absolute',
-                      left: '12px',
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      width: '20px',
-                      height: '20px',
-                      color: '#6b7280'
-                    }} />
-                    <input
-                      type="text"
-                      value={ingredientSearchQuery}
-                      onChange={(e) => setIngredientSearchQuery(e.target.value)}
-                      placeholder="e.g., mercury, hydroquinone, tretinoin..."
-                      style={{
-                        width: '100%',
-                        padding: '12px 12px 12px 44px',
-                        border: '1px solid #d1d5db',
-                        borderRadius: '8px',
-                        fontSize: '14px',
-                        outline: 'none'
-                      }}
-                      onFocus={(e) => e.target.style.borderColor = '#9333ea'}
-                      onBlur={(e) => e.target.style.borderColor = '#d1d5db'}
-                    />
-                  </div>
-                </div>
-
-                {/* Sort Dropdown */}
-                <div style={{ minWidth: '200px' }}>
-                  <label style={{ 
-                    display: 'block', 
-                    fontSize: '14px', 
-                    fontWeight: '500', 
-                    marginBottom: '6px' 
-                  }}>
-                    Sort by
-                  </label>
-                  <select
-                    value={ingredientSortBy}
-                    onChange={(e) => setIngredientSortBy(e.target.value)}
-                    style={{
-                      width: '100%',
-                      padding: '12px',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      backgroundColor: 'white',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <option value="risk">Risk Level</option>
-                    <option value="name">Ingredient Name</option>
-                    <option value="bannedYear">Banned Year</option>
-                  </select>
-                </div>
-
-                {/* Sort Direction Toggle */}
-                <div>
-                  <label style={{ 
-                    display: 'block', 
-                    fontSize: '14px', 
-                    fontWeight: '500', 
-                    marginBottom: '6px' 
-                  }}>
-                    Order
-                  </label>
-                  <button
-                    onClick={() => setIngredientSortDirection(ingredientSortDirection === 'asc' ? 'desc' : 'asc')}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '8px',
-                      padding: '12px 16px',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      backgroundColor: 'white',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s ease',
-                      minWidth: '120px'
-                    }}
-                    onMouseEnter={(e) => {
-                      e.target.style.backgroundColor = '#f9fafb';
-                      e.target.style.borderColor = '#9333ea';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.target.style.backgroundColor = 'white';
-                      e.target.style.borderColor = '#d1d5db';
-                    }}
-                    title={`Currently sorting ${ingredientSortDirection === 'asc' ? 'ascending (low to high)' : 'descending (high to low)'}`}
-                  >
-                    {ingredientSortDirection === 'asc' ? (
-                      <>
-                        <ArrowUp style={{ width: '16px', height: '16px' }} />
-                        <span>Low to High</span>
-                      </>
-                    ) : (
-                      <>
-                        <ArrowDown style={{ width: '16px', height: '16px' }} />
-                        <span>High to Low</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-              
-              {/* Results Summary */}
-              <div style={{ marginTop: '16px', fontSize: '14px', color: '#6b7280' }}>
-                {ingredientSearchQuery ? (
-                  `Found ${getFilteredAndSortedIngredients().length} ingredients matching "${ingredientSearchQuery}"`
-                ) : (
-                  `Showing ${getFilteredAndSortedIngredients().length} total ingredients`
-                )}
-                {' • '}
-                Sorted by {ingredientSortBy.replace(/([A-Z])/g, ' $1').toLowerCase()} ({ingredientSortDirection === 'asc' ? 'low to high' : 'high to low'})
-              </div>
-            </div>
-
-            {loading ? <LoadingSpinner /> : (
-              <div className="ingredients-grid">
-                {getFilteredAndSortedIngredients().map((ingredient, idx) => {
-                  const formattedIngredient = formatIngredient(ingredient);
-                  return (
-                    <div key={idx} className="ingredient-card">
-                      <div className="ingredient-header">
-                        <h3 className="ingredient-name">{formattedIngredient.name}</h3>
-                        <span className={`risk-badge ${formattedIngredient.risk}`}>
-                          {formattedIngredient.risk === 'high' ? 'High Risk' : 
-                           formattedIngredient.risk === 'medium' ? 'Medium Risk' : 'Low Risk'}
-                        </span>
-                      </div>
-                      
-                      <div>
-                        <p className="ingredient-effects-label">Health Effects:</p>
-                        <p className="ingredient-effects">{formattedIngredient.effects}</p>
-                        
-                        {formattedIngredient.commonName && (
-                          <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '8px' }}>
-                            <strong>Also known as:</strong> {formattedIngredient.commonName}
-                          </p>
-                        )}
-                        
-                        {formattedIngredient.usage && (
-                          <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '8px' }}>
-                            <strong>Common usage:</strong> {formattedIngredient.usage}
-                          </p>
-                        )}
-
-                        {formattedIngredient.alternative && (
-                          <p style={{ fontSize: '12px', color: '#059669', marginTop: '8px' }}>
-                            <strong>Safer alternatives:</strong> {formattedIngredient.alternative}
-                          </p>
-                        )}
-
-                        {formattedIngredient.shortRisk && (
-                          <p style={{ fontSize: '12px', color: '#dc2626', marginTop: '8px' }}>
-                            <strong>Short-term risks:</strong> {formattedIngredient.shortRisk}
-                          </p>
-                        )}
-
-                        {formattedIngredient.longRisk && (
-                          <p style={{ fontSize: '12px', color: '#dc2626', marginTop: '8px' }}>
-                            <strong>Long-term risks:</strong> {formattedIngredient.longRisk}
-                          </p>
-                        )}
-
-                        {formattedIngredient.simpleExplanation && (
-                          <p style={{ fontSize: '12px', color: '#4b5563', marginTop: '8px', fontStyle: 'italic' }}>
-                            <strong>Simple explanation:</strong> {formattedIngredient.simpleExplanation}
-                          </p>
-                        )}
-
-                        {formattedIngredient.bannedYear && (
-                          <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '8px' }}>
-                            <strong>Banned since:</strong> {formattedIngredient.bannedYear}
-                          </p>
-                        )}
-                      </div>
-                      
-                      <div className="ingredient-footer">
-                        <p className="ingredient-note">
-                          <AlertTriangle style={{ display: 'inline', width: '12px', height: '12px', marginRight: '4px' }} />
-                          {formattedIngredient.banStatus || 'Banned by MOH Malaysia and multiple international health authorities'}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Empty State */}
-            {!loading && getFilteredAndSortedIngredients().length === 0 && (
-              <div style={{ textAlign: 'center', padding: '60px 20px' }}>
-                <Search style={{ width: '48px', height: '48px', color: '#d1d5db', margin: '0 auto 16px' }} />
-                <h3 style={{ color: '#6b7280', marginBottom: '8px', fontSize: '18px' }}>No ingredients found</h3>
-                <p style={{ color: '#9ca3af' }}>Try adjusting your search terms to find ingredients</p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Brand Safety Tab - Fixed Calculations */}
-        {activeTab === 'brands' && (
-          <div>
-            <div className="section-header">
-              <h2 className="section-title">Brand Safety Tracker</h2>
-              <p className="section-subtitle">
-                Check the safety record of cosmetic brands based on their cancellation history
-              </p>
-            </div>
-
-            {loading ? <LoadingSpinner /> : (
-              <div className="brands-grid">
-                {brandStats.map((brand, idx) => {
-                  const formattedBrand = formatBrandStat(brand);
-                  return (
-                    <div key={idx} className="brand-card">
-                      <div className="brand-header">
-                        <h3 className="brand-name">{formattedBrand.brand}</h3>
-                        <div className={`brand-icon ${getBrandRiskLevel(formattedBrand.cancellationRate)}`}>
-                          {getBrandIcon(formattedBrand.cancellationRate)}
-                        </div>
-                      </div>
-                      
-                      <div className="brand-stats">
-                        <div className="brand-stat">
-                          <span className="brand-stat-label">Total Products</span>
-                          <span className="brand-stat-value">{formattedBrand.totalProducts}</span>
-                        </div>
-                        <div className="brand-stat">
-                          <span className="brand-stat-label">Approved Products</span>
-                          <span className="brand-stat-value">{formattedBrand.approvedProducts}</span>
-                        </div>
-                        <div className="brand-stat">
-                          <span className="brand-stat-label">Cancelled Products</span>
-                          <span className="brand-stat-value cancelled">{formattedBrand.cancelledProducts}</span>
-                        </div>
-                        <div className="brand-cancellation-rate">
-                          <div className="cancellation-rate-header">
-                            <span className="cancellation-rate-label">Cancellation Rate</span>
-                            <span className={`cancellation-rate-value ${getBrandRiskLevel(formattedBrand.cancellationRate).replace('-risk', '')}`}>
-                              {formattedBrand.cancellationRate.toFixed(1)}%
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Modals */}
@@ -3759,7 +3817,6 @@ const CosmeticSafetyApp = () => {
     </div>
   );
 };
-
 
 
 export default CosmeticSafetyApp;

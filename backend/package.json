@@ -1,0 +1,20 @@
+{
+  "name": "cosmetic-safety-backend",
+  "version": "1.0.0",
+  "description": "Backend API for CosmeticGuard safety app",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "pg": "^8.11.3",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.10.9"
+  }
+}
