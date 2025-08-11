@@ -612,6 +612,60 @@ app.get('/api/brands/score/:brandName', async (req, res) => {
   }
 });
 
+// Get brand cancellation history for specific harmful ingredients
+app.get('/api/brands/history/:brandName', async (req, res) => {
+  const { brandName } = req.params;
+  
+  const client = await pool.connect();
+  try {
+    console.log('Fetching brand cancellation history for:', brandName);
+    
+    // Target harmful ingredients that should trigger warnings
+    const targetIngredients = ['mercury', 'hydroquinone', 'steroid', 'corticosteroid'];
+    
+    const result = await client.query(`
+      SELECT DISTINCT s.substance, s.risk_level, s.health_effect,
+             array_agg(DISTINCT p.product) as affected_products,
+             array_agg(DISTINCT p.notif_no) as affected_notif_nos,
+             COUNT(DISTINCT p.notif_no) as product_count
+      FROM companies c
+      JOIN categorized_products p ON c.company_id = p.company_id 
+      JOIN cancelled_products cp ON p.notif_no = cp.notif_no
+      JOIN cancelled_product_substances cps ON cp.notif_no = cps.notif_no
+      JOIN substances s ON cps.substance_id = s.substance_id
+      WHERE c.company_name ILIKE $1 
+        AND p.status = 'cancelled'
+        AND (s.substance ILIKE ANY($2))
+      GROUP BY s.substance, s.risk_level, s.health_effect
+      ORDER BY product_count DESC, s.risk_level
+    `, [
+      `%${brandName}%`, 
+      targetIngredients.map(ingredient => `%${ingredient}%`)
+    ]);
+    
+    const brandHistory = {
+      brand_name: brandName,
+      harmful_ingredients: result.rows.map(row => ({
+        ingredient: row.substance,
+        risk_level: row.risk_level,
+        health_effect: row.health_effect,
+        affected_products: row.affected_products,
+        affected_notif_nos: row.affected_notif_nos,
+        product_count: parseInt(row.product_count)
+      })),
+      total_cancellation_ingredients: result.rows.length
+    };
+    
+    console.log('Brand history fetched:', brandHistory.total_cancellation_ingredients, 'harmful ingredients found');
+    res.json(brandHistory);
+  } catch (err) {
+    console.error('getBrandHistory failed:', err);
+    res.status(500).json({ error: 'Failed to get brand history', details: err.message });
+  } finally {
+    client.release();
+  }
+});
+
 // Get recent approved products
 app.get('/api/products/recent', async (req, res) => {
   const { limit = 10 } = req.query;

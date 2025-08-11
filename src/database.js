@@ -317,6 +317,24 @@ export const cosmetics = {
     }
   },
 
+  // Get brand cancellation history for harmful ingredients
+  async getBrandHistory(brandName) {
+    try {
+      console.log('Fetching brand history for:', brandName);
+      const data = await apiRequest(`/brands/history/${encodeURIComponent(brandName)}`);
+      
+      console.log('Brand history fetched:', data);
+      return data;
+    } catch (err) {
+      if (err.message.includes('404')) {
+        console.warn('No brand history found for:', brandName);
+        return { brand_name: brandName, harmful_ingredients: [], total_cancellation_ingredients: 0 };
+      }
+      console.warn('getBrandHistory failed:', err);
+      return { brand_name: brandName, harmful_ingredients: [], total_cancellation_ingredients: 0 };
+    }
+  },
+
   // Get score breakdown by brand with fallback search strategies
   async getScoreBreakdownWithFallback(brandName) {
     try {

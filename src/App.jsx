@@ -84,6 +84,16 @@ const CosmeticSafetyApp = () => {
   const [scoreCalculationData, setScoreCalculationData] = useState(null);
   const [actualScoreBreakdown, setActualScoreBreakdown] = useState(null);
 
+  // Brand warning state
+  const [brandHistory, setBrandHistory] = useState(null);
+  const [showBrandWarning, setShowBrandWarning] = useState(false);
+  const [brandWarningLoading, setBrandWarningLoading] = useState(false);
+
+  // Brand history cache for Brand Safety tab
+  const [brandHistoryCache, setBrandHistoryCache] = useState({});
+  const [brandWarningsLoaded, setBrandWarningsLoaded] = useState(false);
+  const [brandWarningsLoading, setBrandWarningsLoading] = useState(false);
+
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(12); // Increased for better grid layouts
@@ -174,6 +184,13 @@ const CosmeticSafetyApp = () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [showSearchTypeDropdown, showSuggestions]);
+
+  // Load brand histories when Brand Safety tab is activated
+  useEffect(() => {
+    if (activeTab === 'brands' && brandStats.length > 0) {
+      loadBrandHistoriesForTab();
+    }
+  }, [activeTab, brandStats]);
 
   const loadInitialData = async () => {
     try {
@@ -303,6 +320,12 @@ const CosmeticSafetyApp = () => {
     setShowScoreExplanation(false);
     setScoreCalculationData(null);
     setActualScoreBreakdown(null);
+    setBrandHistory(null);
+    setShowBrandWarning(false);
+    setBrandWarningLoading(false);
+    setBrandHistoryCache({});
+    setBrandWarningsLoaded(false);
+    setBrandWarningsLoading(false);
     setCurrentPage(1);
     setBrandCurrentPage(1); // Reset brand pagination
     // Note: Filters are preserved to remember user preferences
@@ -656,6 +679,24 @@ const CosmeticSafetyApp = () => {
     const formattedProduct = formatProduct(product);
     setSelectedProduct(formattedProduct);
     
+    // Load brand history for harmful ingredients warning
+    if (formattedProduct.brand) {
+      setBrandWarningLoading(true);
+      setShowBrandWarning(false);
+      try {
+        const history = await cosmetics.getBrandHistory(formattedProduct.brand);
+        setBrandHistory(history);
+        console.log('Brand history loaded:', history);
+      } catch (err) {
+        console.warn('Failed to load brand history:', err);
+        setBrandHistory(null);
+      } finally {
+        setBrandWarningLoading(false);
+      }
+    } else {
+      setBrandHistory(null);
+    }
+    
     // Load alternative products if this is cancelled or high-risk
     if (formattedProduct.status === 'cancelled' || formattedProduct.riskScore <= 40) {
       try {
@@ -666,6 +707,56 @@ const CosmeticSafetyApp = () => {
       }
     } else {
       setAlternativeProducts([]);
+    }
+  };
+
+  // Load brand histories for Brand Safety tab
+  const loadBrandHistoriesForTab = async () => {
+    if (brandWarningsLoaded || brandWarningsLoading || brandStats.length === 0) {
+      return;
+    }
+
+    setBrandWarningsLoading(true);
+    try {
+      // Only load histories for brands with cancelled products to optimize performance
+      const brandsWithCancellations = brandStats.filter(brand => {
+        const cancelledCount = parseInt(brand.product_cancelled || brand.cancelledProducts || 0);
+        return cancelledCount > 0;
+      });
+
+      console.log(`Loading brand histories for ${brandsWithCancellations.length} brands with cancellations...`);
+      
+      // Load histories in parallel with controlled concurrency
+      const historyPromises = brandsWithCancellations.map(async (brand) => {
+        try {
+          const brandName = brand.brand || brand.company_name || brand.brand_name;
+          if (!brandName) return null;
+
+          const history = await cosmetics.getBrandHistory(brandName);
+          return { brandName, history };
+        } catch (err) {
+          console.warn(`Failed to load history for brand: ${brand.brand}`, err);
+          return null;
+        }
+      });
+
+      const results = await Promise.all(historyPromises);
+      
+      // Build cache object
+      const newCache = {};
+      results.forEach(result => {
+        if (result && result.brandName) {
+          newCache[result.brandName] = result.history;
+        }
+      });
+
+      setBrandHistoryCache(newCache);
+      setBrandWarningsLoaded(true);
+      console.log('Brand histories loaded for Brand Safety tab:', Object.keys(newCache).length);
+    } catch (err) {
+      console.error('Failed to load brand histories:', err);
+    } finally {
+      setBrandWarningsLoading(false);
     }
   };
 
@@ -3632,6 +3723,66 @@ const CosmeticSafetyApp = () => {
                           </div>
                         </div>
 
+                        {/* Brand Warning for Harmful Ingredients History */}
+                        {brandHistoryCache[formatted.brand] && 
+                         brandHistoryCache[formatted.brand].harmful_ingredients && 
+                         brandHistoryCache[formatted.brand].harmful_ingredients.length > 0 && (
+                          <div 
+                            className="brand-warning-alert" 
+                            style={{ 
+                              background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)',
+                              border: '1px solid #fca5a5',
+                              borderRadius: '8px',
+                              padding: '12px',
+                              margin: '12px 0',
+                              fontSize: '12px'
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                              <AlertTriangle 
+                                style={{ 
+                                  width: '16px', 
+                                  height: '16px', 
+                                  color: '#dc2626',
+                                  flexShrink: 0,
+                                  marginTop: '1px'
+                                }} 
+                              />
+                              <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: '12px', fontWeight: '600', color: '#dc2626', marginBottom: '4px' }}>
+                                  Previously Used Harmful Ingredients
+                                </div>
+                                <div style={{ fontSize: '11px', color: '#7f1d1d', lineHeight: '1.4' }}>
+                                  {brandHistoryCache[formatted.brand].harmful_ingredients.slice(0, 2)
+                                    .map(ing => ing.ingredient).join(', ')}
+                                  {brandHistoryCache[formatted.brand].harmful_ingredients.length > 2 && 
+                                    ` +${brandHistoryCache[formatted.brand].harmful_ingredients.length - 2} more`}
+                                  {' '}in cancelled products
+                                </div>
+                                <div style={{ fontSize: '10px', color: '#991b1b', marginTop: '4px', opacity: 0.8 }}>
+                                  {brandHistoryCache[formatted.brand].total_cancellation_ingredients} harmful ingredient{brandHistoryCache[formatted.brand].total_cancellation_ingredients > 1 ? 's' : ''} found
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Loading indicator for brand warnings */}
+                        {brandWarningsLoading && (
+                          <div style={{ 
+                            padding: '8px 12px', 
+                            margin: '8px 0',
+                            fontSize: '11px', 
+                            color: '#6b7280',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px'
+                          }}>
+                            <Loader2 style={{ width: '12px', height: '12px', animation: 'spin 1s linear infinite' }} />
+                            Loading brand history...
+                          </div>
+                        )}
+
                         {/* Stats Grid */}
                         <div className="brand-stats">
                           <div className="brand-stat">
@@ -3775,6 +3926,9 @@ const CosmeticSafetyApp = () => {
                   onClick={() => {
                     setSelectedProduct(null);
                     setAlternativeProducts([]);
+                    setBrandHistory(null);
+                    setShowBrandWarning(false);
+                    setBrandWarningLoading(false);
                   }}
                   className="clear-button"
                   style={{ marginBottom: '16px' }}
@@ -3791,6 +3945,95 @@ const CosmeticSafetyApp = () => {
                       <span className="product-brand">{selectedProduct.notificationNumber}</span>
                     </div>
                   </div>
+
+                  {/* Brand Warning for Harmful Ingredients History */}
+                  {brandHistory && brandHistory.harmful_ingredients && brandHistory.harmful_ingredients.length > 0 && (
+                    <div 
+                      className="warning-alert" 
+                      style={{ 
+                        background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)',
+                        border: '2px solid #fca5a5',
+                        borderRadius: '12px',
+                        padding: '16px',
+                        marginBottom: '20px',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '12px'
+                      }}
+                    >
+                      <AlertTriangle 
+                        style={{ 
+                          width: '24px', 
+                          height: '24px', 
+                          color: '#dc2626',
+                          flexShrink: 0,
+                          marginTop: '2px'
+                        }} 
+                      />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '16px', fontWeight: '600', color: '#dc2626', marginBottom: '8px' }}>
+                          ⚠️ Brand History Warning
+                        </div>
+                        <p style={{ fontSize: '14px', color: '#7f1d1d', margin: '0 0 12px 0', lineHeight: '1.5' }}>
+                          This brand has previously used{' '}
+                          <strong>
+                            {brandHistory.harmful_ingredients.slice(0, 2).map(ing => ing.ingredient).join(', ')}
+                            {brandHistory.harmful_ingredients.length > 2 && ` and ${brandHistory.harmful_ingredients.length - 2} other harmful ingredients`}
+                          </strong>{' '}
+                          in other products that were later cancelled by MOH Malaysia.
+                        </p>
+                        {showBrandWarning && (
+                          <div style={{ 
+                            background: '#fef2f2',
+                            border: '1px solid #fecaca',
+                            borderRadius: '8px',
+                            padding: '12px',
+                            marginTop: '12px'
+                          }}>
+                            <div style={{ fontSize: '14px', fontWeight: '600', color: '#7f1d1d', marginBottom: '8px' }}>
+                              Cancelled Products with Harmful Ingredients:
+                            </div>
+                            {brandHistory.harmful_ingredients.map((ingredient, idx) => (
+                              <div key={idx} style={{ marginBottom: '8px', fontSize: '13px', color: '#7f1d1d' }}>
+                                <strong>{ingredient.ingredient}</strong>{' '}
+                                <span style={{ 
+                                  background: ingredient.risk_level === 'HIGH' ? '#dc2626' : 
+                                             ingredient.risk_level === 'MEDIUM' ? '#ea580c' : '#65a30d',
+                                  color: 'white',
+                                  padding: '2px 6px',
+                                  borderRadius: '4px',
+                                  fontSize: '11px',
+                                  fontWeight: '500'
+                                }}>
+                                  {ingredient.risk_level} RISK
+                                </span>
+                                <div style={{ fontSize: '12px', color: '#991b1b', marginTop: '4px' }}>
+                                  Found in {ingredient.product_count} cancelled product{ingredient.product_count > 1 ? 's' : ''}
+                                  {ingredient.health_effect && `: ${ingredient.health_effect}`}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <button
+                          onClick={() => setShowBrandWarning(!showBrandWarning)}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#dc2626',
+                            fontSize: '13px',
+                            fontWeight: '600',
+                            cursor: 'pointer',
+                            textDecoration: 'underline',
+                            padding: '0',
+                            marginTop: '8px'
+                          }}
+                        >
+                          {showBrandWarning ? 'Hide Details' : 'Show Details'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   <div 
                     className={`risk-assessment ${getRiskLevel(selectedProduct.riskScore)}`}
