@@ -246,7 +246,7 @@ app.get('/api/search/enhanced', async (req, res) => {
     expandedTerms.forEach(term => {
       params.push(`%${term}%`, `%${term}%`, `%${term}%`);
     });
-    params.push(200); // limit
+    params.push(50); // limit - reduced for better performance
     
     // Build search conditions with proper parameter placeholders
     const searchConditions = expandedTerms.map((term, index) => {
@@ -257,11 +257,17 @@ app.get('/api/search/enhanced', async (req, res) => {
     const limitParam = `$${params.length}`;
 
     const result = await client.query(`
-      SELECT p.notif_no, p.date_notif, p.status, p.product, p.category,
-             c.company_name as company, c.reliability_score
+      SELECT DISTINCT p.notif_no, p.date_notif, p.status, p.product, p.category,
+             c.company_name as company, c.reliability_score,
+             STRING_AGG(DISTINCT s.substance, '|') as harmful_substances,
+             cp.manufacturer
       FROM categorized_products p
       JOIN companies c ON p.company_id = c.company_id
+      LEFT JOIN cancelled_product_substances cps ON p.notif_no = cps.notif_no AND p.status = 'cancelled'
+      LEFT JOIN substances s ON cps.substance_id = s.substance_id
+      LEFT JOIN cancelled_products cp ON p.notif_no = cp.notif_no AND p.status = 'cancelled'
       WHERE ${searchConditions}
+      GROUP BY p.notif_no, p.date_notif, p.status, p.product, p.category, c.company_name, c.reliability_score, cp.manufacturer
       ORDER BY p.date_notif DESC
       LIMIT ${limitParam}
     `, params);
@@ -270,44 +276,24 @@ app.get('/api/search/enhanced', async (req, res) => {
       return res.json([]);
     }
     
-    // For each product, if cancelled, get harmful substances
-    const enhancedProducts = await Promise.all(
-      result.rows.map(async (product) => {
-        if (product.status === 'cancelled') {
-          try {
-            // Get harmful substances for cancelled products
-            const substanceResult = await client.query(`
-              SELECT s.substance
-              FROM cancelled_product_substances cps
-              JOIN substances s ON cps.substance_id = s.substance_id
-              WHERE cps.notif_no = $1
-            `, [product.notif_no]);
-            
-            // Get cancelled product info
-            const cancelledResult = await client.query(`
-              SELECT manufacturer
-              FROM cancelled_products
-              WHERE notif_no = $1
-            `, [product.notif_no]);
-            
-            return {
-              ...product,
-              harmful_ingredients: substanceResult.rows.map(s => s.substance),
-              manufacturer: cancelledResult.rows[0]?.manufacturer
-            };
-          } catch (err) {
-            return {
-              ...product,
-              harmful_ingredients: []
-            };
-          }
-        }
-        return {
-          ...product,
-          harmful_ingredients: []
-        };
-      })
-    );
+    // Process the results to format harmful_ingredients properly
+    const enhancedProducts = result.rows.map(product => {
+      const harmful_ingredients = product.harmful_substances 
+        ? product.harmful_substances.split('|').filter(s => s && s.trim()) 
+        : [];
+      
+      return {
+        notif_no: product.notif_no,
+        date_notif: product.date_notif,
+        status: product.status,
+        product: product.product,
+        category: product.category,
+        company: product.company,
+        reliability_score: product.reliability_score,
+        harmful_ingredients: harmful_ingredients,
+        manufacturer: product.manufacturer || product.company
+      };
+    });
     
     res.json(enhancedProducts);
   } catch (error) {
