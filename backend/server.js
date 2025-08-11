@@ -229,10 +229,10 @@ app.get('/api/search/realtime', async (req, res) => {
 
 // FIXED: Enhanced search with substances (using direct database calls instead of HTTP)
 app.get('/api/search/enhanced', async (req, res) => {
-  const { query } = req.query;
+  const { query, page = 1, limit = 50 } = req.query;
   
   if (!query) {
-    return res.json([]);
+    return res.json({ products: [], totalCount: 0, currentPage: 1, totalPages: 0 });
   }
 
   const client = await pool.connect();
@@ -246,7 +246,13 @@ app.get('/api/search/enhanced', async (req, res) => {
     expandedTerms.forEach(term => {
       params.push(`%${term}%`, `%${term}%`, `%${term}%`);
     });
-    params.push(50); // limit - reduced for better performance
+    
+    // Add pagination parameters
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit))); // Max 100 per page
+    const offset = (pageNum - 1) * limitNum;
+    
+    params.push(limitNum, offset);
     
     // Build search conditions with proper parameter placeholders
     const searchConditions = expandedTerms.map((term, index) => {
@@ -254,8 +260,21 @@ app.get('/api/search/enhanced', async (req, res) => {
       return `(p.product ILIKE $${baseIndex + 1} OR c.company_name ILIKE $${baseIndex + 2} OR p.notif_no ILIKE $${baseIndex + 3})`;
     }).join(' OR ');
     
-    const limitParam = `$${params.length}`;
+    const limitParam = `$${params.length - 1}`;
+    const offsetParam = `$${params.length}`;
 
+    // First get total count
+    const countResult = await client.query(`
+      SELECT COUNT(DISTINCT p.notif_no) as total
+      FROM categorized_products p
+      JOIN companies c ON p.company_id = c.company_id
+      LEFT JOIN cancelled_product_substances cps ON p.notif_no = cps.notif_no AND p.status = 'cancelled'
+      LEFT JOIN substances s ON cps.substance_id = s.substance_id
+      LEFT JOIN cancelled_products cp ON p.notif_no = cp.notif_no AND p.status = 'cancelled'
+      WHERE ${searchConditions}
+    `, params.slice(0, -2)); // Remove limit and offset params for count query
+
+    // Then get paginated results
     const result = await client.query(`
       SELECT DISTINCT p.notif_no, p.date_notif, p.status, p.product, p.category,
              c.company_name as company, c.reliability_score,
@@ -269,11 +288,21 @@ app.get('/api/search/enhanced', async (req, res) => {
       WHERE ${searchConditions}
       GROUP BY p.notif_no, p.date_notif, p.status, p.product, p.category, c.company_name, c.reliability_score, cp.manufacturer
       ORDER BY p.date_notif DESC
-      LIMIT ${limitParam}
+      LIMIT ${limitParam} OFFSET ${offsetParam}
     `, params);
     
+    const totalCount = parseInt(countResult.rows[0]?.total || 0);
+    const totalPages = Math.ceil(totalCount / limitNum);
+    
     if (!result.rows || result.rows.length === 0) {
-      return res.json([]);
+      return res.json({ 
+        products: [], 
+        totalCount, 
+        currentPage: pageNum, 
+        totalPages,
+        hasNextPage: false,
+        hasPrevPage: false
+      });
     }
     
     // Process the results to format harmful_ingredients properly
@@ -295,7 +324,14 @@ app.get('/api/search/enhanced', async (req, res) => {
       };
     });
     
-    res.json(enhancedProducts);
+    res.json({
+      products: enhancedProducts,
+      totalCount,
+      currentPage: pageNum,
+      totalPages,
+      hasNextPage: pageNum < totalPages,
+      hasPrevPage: pageNum > 1
+    });
   } catch (error) {
     console.error('Enhanced search failed:', error);
     res.status(500).json({ error: 'Enhanced search failed', details: error.message });

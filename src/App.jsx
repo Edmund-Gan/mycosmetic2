@@ -88,6 +88,14 @@ const CosmeticSafetyApp = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(12); // Increased for better grid layouts
   
+  // Backend pagination state
+  const [searchPage, setSearchPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalSearchPages, setTotalSearchPages] = useState(0);
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const [hasPrevPage, setHasPrevPage] = useState(false);
+  const [itemsPerSearchPage] = useState(100); // Backend pagination limit
+  
   // Brand pagination state
   const [brandCurrentPage, setBrandCurrentPage] = useState(1);
   const [brandItemsPerPage] = useState(30); // 30 brands per page for better performance
@@ -525,8 +533,19 @@ const CosmeticSafetyApp = () => {
       setError(null);
       setShowSuggestions(false);
       setCurrentPage(1);
+      setSearchPage(1);
       
-      let results = await cosmetics.searchProductsWithSubstances(searchTerm);
+      const searchResponse = await cosmetics.searchProductsWithSubstances(searchTerm, 1, itemsPerSearchPage);
+      
+      // Handle pagination metadata
+      if (searchResponse.totalCount !== undefined) {
+        setTotalCount(searchResponse.totalCount);
+        setTotalSearchPages(searchResponse.totalPages);
+        setHasNextPage(searchResponse.hasNextPage);
+        setHasPrevPage(searchResponse.hasPrevPage);
+      }
+      
+      let results = searchResponse.products || searchResponse; // Handle both old and new response formats
       
       // Apply search type filtering
       if (results && searchType !== 'all') {
@@ -571,6 +590,52 @@ const CosmeticSafetyApp = () => {
       }
     } catch (err) {
       setError(`Search failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load more search results (pagination)
+  const loadMoreResults = async () => {
+    if (!hasNextPage || loading) return;
+    
+    try {
+      setLoading(true);
+      const nextPage = searchPage + 1;
+      const searchResponse = await cosmetics.searchProductsWithSubstances(searchQuery, nextPage, itemsPerSearchPage);
+      
+      let newResults = searchResponse.products || searchResponse;
+      
+      // Apply search type filtering to new results
+      if (newResults && searchType !== 'all') {
+        newResults = newResults.filter(product => {
+          switch (searchType) {
+            case 'company':
+              return product.company?.toLowerCase().includes(searchQuery.toLowerCase());
+            case 'product':
+              return product.product?.toLowerCase().includes(searchQuery.toLowerCase());
+            case 'notification':
+              return product.notif_no?.toLowerCase().includes(searchQuery.toLowerCase());
+            default:
+              return true;
+          }
+        });
+      }
+      
+      if (newResults && newResults.length > 0) {
+        const filteredNewResults = applyFilters(newResults);
+        
+        // Append new results to existing ones
+        setSearchResults(prev => [...prev, ...filteredNewResults]);
+        setUnfilteredResultsCount(prev => prev + newResults.length);
+        
+        // Update pagination state
+        setSearchPage(nextPage);
+        setHasNextPage(searchResponse.hasNextPage);
+        setHasPrevPage(searchResponse.hasPrevPage);
+      }
+    } catch (err) {
+      setError(`Failed to load more results: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -3648,6 +3713,58 @@ const CosmeticSafetyApp = () => {
 
                 {/* Pagination - Bottom */}
                 <PaginationComponent />
+
+                {/* Load More Button for Backend Pagination */}
+                {hasNextPage && (
+                  <div style={{ 
+                    display: 'flex', 
+                    justifyContent: 'center', 
+                    alignItems: 'center',
+                    marginTop: '24px',
+                    gap: '16px'
+                  }}>
+                    <button
+                      onClick={loadMoreResults}
+                      disabled={loading}
+                      style={{
+                        padding: '12px 24px',
+                        backgroundColor: loading ? '#d1d5db' : '#3b82f6',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '8px',
+                        fontSize: '16px',
+                        fontWeight: '500',
+                        cursor: loading ? 'not-allowed' : 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        transition: 'all 0.2s'
+                      }}
+                      onMouseOver={(e) => {
+                        if (!loading) {
+                          e.target.style.backgroundColor = '#2563eb';
+                        }
+                      }}
+                      onMouseOut={(e) => {
+                        if (!loading) {
+                          e.target.style.backgroundColor = '#3b82f6';
+                        }
+                      }}
+                    >
+                      {loading ? 'Loading...' : `Load More Products (${totalCount - searchResults.length} more available)`}
+                    </button>
+                    
+                    {totalCount > 0 && (
+                      <div style={{ 
+                        fontSize: '14px', 
+                        color: '#6b7280',
+                        textAlign: 'center'
+                      }}>
+                        Showing {searchResults.length} of {totalCount} total results
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 

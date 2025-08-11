@@ -182,13 +182,13 @@ export const cosmetics = {
   },
 
   // Enhanced search that includes cancelled product info with harmful substances
-  async searchProductsWithSubstances(query) {
+  async searchProductsWithSubstances(query, page = 1, limit = 50) {
     try {
-      console.log('Enhanced search for:', query);
-      const params = new URLSearchParams({ query });
+      console.log('Enhanced search for:', query, 'page:', page);
+      const params = new URLSearchParams({ query, page: page.toString(), limit: limit.toString() });
       const data = await apiRequest(`/search/enhanced?${params}`);
       
-      console.log('Enhanced search completed:', data.length, 'results');
+      console.log('Enhanced search completed:', data.products?.length || 0, 'results,', data.totalCount, 'total');
       return data;
     } catch (error) {
       console.error('Enhanced search failed:', error);
