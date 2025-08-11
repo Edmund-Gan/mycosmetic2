@@ -3,8 +3,14 @@ import cors from 'cors';
 import { Pool } from 'pg';
 import dotenv from 'dotenv';
 
-// Load environment variables
-dotenv.config();
+// Load environment variables only in development
+// In production (Vercel), use environment variables from dashboard
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config();
+  console.log('Loading environment variables from .env file (development mode)');
+} else {
+  console.log('Using environment variables from Vercel dashboard (production mode)');
+}
 
 const app = express();
 const PORT = process.env.PORT || 3001;
