@@ -347,10 +347,11 @@ app.get('/api/alternatives/:notifNo', async (req, res) => {
   
   const client = await pool.connect();
   try {
-    // First get the original product details
+    // First get the original product details including company
     const originalResult = await client.query(`
-      SELECT p.category, p.product
+      SELECT p.category, p.product, c.company_name
       FROM categorized_products p
+      JOIN companies c ON p.company_id = c.company_id
       WHERE p.notif_no = $1
     `, [notifNo]);
     
@@ -361,16 +362,23 @@ app.get('/api/alternatives/:notifNo', async (req, res) => {
     const originalProduct = originalResult.rows[0];
     
     const result = await client.query(`
-      SELECT p.notif_no, p.date_notif, p.status, p.product, p.category,
-             c.company_name as company, c.reliability_score
-      FROM categorized_products p
-      JOIN companies c ON p.company_id = c.company_id
-      WHERE p.category = $1 
-        AND p.status = 'approved'
-        AND p.notif_no != $2
-      ORDER BY c.reliability_score DESC
+      WITH ranked_products AS (
+        SELECT p.notif_no, p.date_notif, p.status, p.product, p.category,
+               c.company_name as company, c.reliability_score,
+               ROW_NUMBER() OVER (PARTITION BY c.company_name ORDER BY c.reliability_score DESC, p.notif_no) as brand_rank
+        FROM categorized_products p
+        JOIN companies c ON p.company_id = c.company_id
+        WHERE p.category = $1 
+          AND p.status = 'approved'
+          AND p.notif_no != $2
+          AND c.company_name != $4
+      )
+      SELECT notif_no, date_notif, status, product, category, company, reliability_score
+      FROM ranked_products 
+      WHERE brand_rank = 1
+      ORDER BY reliability_score DESC
       LIMIT $3
-    `, [originalProduct.category, notifNo, parseInt(limit)]);
+    `, [originalProduct.category, notifNo, parseInt(limit), originalProduct.company_name]);
     
     res.json(result.rows);
   } catch (err) {

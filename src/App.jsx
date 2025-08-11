@@ -68,6 +68,10 @@ const CosmeticSafetyApp = () => {
   const [ingredientSortBy, setIngredientSortBy] = useState('risk'); // 'risk', 'name', 'bannedYear'
   const [ingredientSortDirection, setIngredientSortDirection] = useState('desc'); // 'asc' or 'desc'
   
+  // Product search sort states
+  const [productSortBy, setProductSortBy] = useState('score'); // 'score', 'name', 'brand', 'status', 'date'
+  const [productSortDirection, setProductSortDirection] = useState('desc'); // 'asc' or 'desc'
+  
   // Ingredient modal state
   const [showIngredientModal, setShowIngredientModal] = useState(false);
   const [selectedIngredient, setSelectedIngredient] = useState(null);
@@ -336,6 +340,8 @@ const CosmeticSafetyApp = () => {
     setBrandSortDirection('desc'); // Reset brand sort direction
     setIngredientSearchQuery(''); // Reset ingredient search
     setIngredientSortDirection('desc'); // Reset ingredient sort direction
+    setProductSortBy('score'); // Reset product sort
+    setProductSortDirection('desc'); // Reset product sort direction
   };
 
   // Filter and sort brand data
@@ -401,21 +407,23 @@ const CosmeticSafetyApp = () => {
       
       let comparison = 0;
       switch (ingredientSortBy) {
-        case 'risk':
+        case 'risk': {
           // Risk level sorting: high -> medium -> low
           const riskOrder = { 'high': 3, 'medium': 2, 'low': 1 };
           const aRisk = riskOrder[aFormatted.risk] || 0;
           const bRisk = riskOrder[bFormatted.risk] || 0;
           comparison = bRisk - aRisk;
           break;
+        }
         case 'name':
           comparison = (aFormatted.name || '').localeCompare(bFormatted.name || '');
           break;
-        case 'bannedYear':
+        case 'bannedYear': {
           const aYear = parseInt(aFormatted.bannedYear) || 0;
           const bYear = parseInt(bFormatted.bannedYear) || 0;
           comparison = bYear - aYear;
           break;
+        }
         default:
           comparison = (aFormatted.name || '').localeCompare(bFormatted.name || '');
       }
@@ -425,6 +433,53 @@ const CosmeticSafetyApp = () => {
     });
     
     return sortedIngredients;
+  };
+
+  // Filter and sort product search results
+  const getFilteredAndSortedProducts = (results) => {
+    if (!results || results.length === 0) {
+      return [];
+    }
+    
+    // Apply sorting
+    const sortedProducts = [...results].sort((a, b) => {
+      const aFormatted = formatProduct(a);
+      const bFormatted = formatProduct(b);
+      
+      let comparison = 0;
+      switch (productSortBy) {
+        case 'score':
+          comparison = (bFormatted.riskScore || 0) - (aFormatted.riskScore || 0);
+          break;
+        case 'name':
+          comparison = (aFormatted.name || '').localeCompare(bFormatted.name || '');
+          break;
+        case 'brand':
+          comparison = (aFormatted.brand || '').localeCompare(bFormatted.brand || '');
+          break;
+        case 'status': {
+          // Approved first, then cancelled
+          const statusOrder = { 'approved': 2, 'cancelled': 1 };
+          const aStatus = statusOrder[aFormatted.status] || 0;
+          const bStatus = statusOrder[bFormatted.status] || 0;
+          comparison = bStatus - aStatus;
+          break;
+        }
+        case 'date': {
+          const aDate = aFormatted.approvalDate ? new Date(aFormatted.approvalDate) : new Date(0);
+          const bDate = bFormatted.approvalDate ? new Date(bFormatted.approvalDate) : new Date(0);
+          comparison = bDate - aDate; // Newest first
+          break;
+        }
+        default:
+          comparison = (bFormatted.riskScore || 0) - (aFormatted.riskScore || 0);
+      }
+      
+      // Apply sort direction
+      return productSortDirection === 'asc' ? -comparison : comparison;
+    });
+    
+    return sortedProducts;
   };
 
   // Apply filters to search results
@@ -978,15 +1033,17 @@ const CosmeticSafetyApp = () => {
 
   // Pagination functions
   const getPaginatedResults = () => {
+    const sortedResults = getFilteredAndSortedProducts(searchResults);
     const actualItemsPerPage = getCurrentItemsPerPage();
     const startIndex = (currentPage - 1) * actualItemsPerPage;
     const endIndex = startIndex + actualItemsPerPage;
-    return searchResults.slice(startIndex, endIndex);
+    return sortedResults.slice(startIndex, endIndex);
   };
 
   const getTotalPages = () => {
+    const sortedResults = getFilteredAndSortedProducts(searchResults);
     const actualItemsPerPage = getCurrentItemsPerPage();
-    return Math.ceil(searchResults.length / actualItemsPerPage);
+    return Math.ceil(sortedResults.length / actualItemsPerPage);
   };
 
   // Handle page change with smooth scrolling
@@ -2138,8 +2195,26 @@ const CosmeticSafetyApp = () => {
       </div>
     );
   };
+  
+  // Determine which product is safer based on reliability score (higher = safer)
+  const determineSaferProduct = (originalProduct, alternativeProduct) => {
+    const originalScore = originalProduct?.riskScore || 0;
+    const alternativeScore = alternativeProduct?.riskScore || 0;
+    
+    if (originalScore > alternativeScore) {
+      return { safer: 'original', riskier: 'alternative' };
+    } else if (alternativeScore > originalScore) {
+      return { safer: 'alternative', riskier: 'original' };
+    } else {
+      return { safer: null, riskier: null }; // Equal scores
+    }
+  };
+
   const ComparisonModal = () => {
     if (!showComparisonModal || !comparisonData) return null;
+
+    // Determine which product is safer
+    const safetyResult = determineSaferProduct(comparisonData.original, comparisonData.alternative);
 
     return (
       <div style={{
@@ -2175,14 +2250,37 @@ const CosmeticSafetyApp = () => {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
             {/* Original Product */}
-            <div>
+            <div className="comparison-product-container">
               <h4 style={{ color: '#dc2626', marginBottom: '12px' }}>Current Product</h4>
-              <div style={{ padding: '16px', border: '2px solid #fecaca', borderRadius: '8px', backgroundColor: '#fef2f2' }}>
+              <div 
+                className={`${safetyResult.safer === 'original' ? 'safer-product' : safetyResult.riskier === 'original' ? 'riskier-product' : ''}`}
+                style={{ 
+                  padding: '16px', 
+                  border: '2px solid #fecaca', 
+                  borderRadius: '8px', 
+                  backgroundColor: '#fef2f2',
+                  position: 'relative'
+                }}
+              >
+                {safetyResult.safer === 'original' && (
+                  <div className="safety-badge recommended-badge">
+                    <CheckCircle style={{ width: '14px', height: '14px' }} />
+                    Recommended
+                  </div>
+                )}
+                {safetyResult.riskier === 'original' && (
+                  <div className="safety-badge warning-badge">
+                    <AlertTriangle style={{ width: '14px', height: '14px' }} />
+                    Higher Risk
+                  </div>
+                )}
                 <h5 style={{ fontSize: '16px', fontWeight: '500', marginBottom: '8px' }}>{comparisonData.original.name}</h5>
                 <p style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>{comparisonData.original.brand}</p>
                 <div style={{ marginBottom: '12px' }}>
                   <span style={{ fontSize: '14px', fontWeight: '500' }}>Risk Score: </span>
-                  <span style={{ fontSize: '16px', fontWeight: '700', color: '#dc2626' }}>{comparisonData.original.riskScore}/100</span>
+                  <span style={{ fontSize: '16px', fontWeight: '700', color: safetyResult.safer === 'original' ? '#059669' : '#dc2626' }}>
+                    {comparisonData.original.riskScore}/100
+                  </span>
                 </div>
                 <div style={{ marginBottom: '8px' }}>
                   <span style={{ fontSize: '14px', fontWeight: '500' }}>Status: </span>
@@ -2215,22 +2313,69 @@ const CosmeticSafetyApp = () => {
             </div>
 
             {/* Alternative Product */}
-            <div>
-              <h4 style={{ color: '#059669', marginBottom: '12px' }}>Safer Alternative</h4>
-              <div style={{ padding: '16px', border: '2px solid #bbf7d0', borderRadius: '8px', backgroundColor: '#f0fdf4' }}>
+            <div className="comparison-product-container">
+              <h4 style={{ color: '#059669', marginBottom: '12px' }}>Alternative Product</h4>
+              <div 
+                className={`${safetyResult.safer === 'alternative' ? 'safer-product' : safetyResult.riskier === 'alternative' ? 'riskier-product' : ''}`}
+                style={{ 
+                  padding: '16px', 
+                  border: '2px solid #bbf7d0', 
+                  borderRadius: '8px', 
+                  backgroundColor: '#f0fdf4',
+                  position: 'relative'
+                }}
+              >
+                {safetyResult.safer === 'alternative' && (
+                  <div className="safety-badge recommended-badge">
+                    <CheckCircle style={{ width: '14px', height: '14px' }} />
+                    Recommended
+                  </div>
+                )}
+                {safetyResult.riskier === 'alternative' && (
+                  <div className="safety-badge warning-badge">
+                    <AlertTriangle style={{ width: '14px', height: '14px' }} />
+                    Higher Risk
+                  </div>
+                )}
                 <h5 style={{ fontSize: '16px', fontWeight: '500', marginBottom: '8px' }}>{comparisonData.alternative.name}</h5>
                 <p style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>{comparisonData.alternative.brand}</p>
                 <div style={{ marginBottom: '12px' }}>
                   <span style={{ fontSize: '14px', fontWeight: '500' }}>Risk Score: </span>
-                  <span style={{ fontSize: '16px', fontWeight: '700', color: '#059669' }}>{comparisonData.alternative.riskScore}/100</span>
+                  <span style={{ fontSize: '16px', fontWeight: '700', color: safetyResult.safer === 'alternative' ? '#059669' : '#dc2626' }}>
+                    {comparisonData.alternative.riskScore}/100
+                  </span>
                 </div>
                 <div style={{ marginBottom: '8px' }}>
                   <span style={{ fontSize: '14px', fontWeight: '500' }}>Status: </span>
-                  <span style={{ color: '#059669' }}>Approved</span>
+                  <span style={{ color: comparisonData.alternative.status === 'approved' ? '#059669' : '#dc2626' }}>
+                    {comparisonData.alternative.status === 'approved' ? 'Approved' : 'Cancelled'}
+                  </span>
                 </div>
-                <div style={{ color: '#059669', fontSize: '14px' }}>
-                  ✅ No harmful ingredients detected
-                </div>
+                {comparisonData.alternative.harmfulIngredients && comparisonData.alternative.harmfulIngredients.length > 0 ? (
+                  <div>
+                    <span style={{ fontSize: '14px', fontWeight: '500', color: '#dc2626' }}>Harmful Ingredients: </span>
+                    <div style={{ marginTop: '4px' }}>
+                      {comparisonData.alternative.harmfulIngredients.map((ing, idx) => (
+                        <span key={idx} style={{ 
+                          display: 'inline-block', 
+                          backgroundColor: '#fecaca', 
+                          color: '#b91c1c',
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          fontSize: '12px',
+                          marginRight: '4px',
+                          marginBottom: '4px'
+                        }}>
+                          {ing}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ color: '#059669', fontSize: '14px' }}>
+                    ✅ No harmful ingredients detected
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -2238,19 +2383,23 @@ const CosmeticSafetyApp = () => {
           <div style={{ 
             marginTop: '20px', 
             padding: '12px', 
-            backgroundColor: '#eff6ff', 
+            backgroundColor: safetyResult.safer === 'alternative' ? '#eff6ff' : safetyResult.safer === 'original' ? '#f0fdf4' : '#f9fafb', 
             borderRadius: '8px',
             textAlign: 'center'
           }}>
-            <p style={{ fontSize: '14px', color: '#1e40af', margin: 0 }}>
-              <strong>Recommendation:</strong> The alternative product has a significantly better safety profile with lower risk and no harmful ingredients.
+            <p style={{ fontSize: '14px', color: safetyResult.safer === 'alternative' ? '#1e40af' : safetyResult.safer === 'original' ? '#047857' : '#4b5563', margin: 0 }}>
+              <strong>Recommendation:</strong> 
+              {safetyResult.safer === 'alternative' && ' The alternative product has a better safety profile with lower risk.'}
+              {safetyResult.safer === 'original' && ' The current product appears to be safer than the alternative.'}
+              {safetyResult.safer === null && ' Both products have similar risk scores. Please review their details carefully.'}
             </p>
           </div>
 
           <div style={{ marginTop: '16px', textAlign: 'center' }}>
             <button 
               onClick={() => {
-                saveAlternative(comparisonData.alternative);
+                const productToSave = safetyResult.safer === 'original' ? comparisonData.original : comparisonData.alternative;
+                saveAlternative(productToSave);
                 setShowComparisonModal(false);
               }}
               style={{
@@ -2264,7 +2413,7 @@ const CosmeticSafetyApp = () => {
               }}
             >
               <Bookmark style={{ width: '16px', height: '16px', marginRight: '6px', display: 'inline' }} />
-              Save Alternative
+              Save {safetyResult.safer === 'original' ? 'Current' : 'Alternative'} Product
             </button>
             <button 
               onClick={() => setShowComparisonModal(false)}
@@ -3848,9 +3997,99 @@ const CosmeticSafetyApp = () => {
                     setUnfilteredResultsCount(0);
                     setShowSuggestions(false);
                     setCurrentPage(1);
+                    setProductSortBy('score');
+                    setProductSortDirection('desc');
                   }} className="clear-button">
                     Clear results
                   </button>
+                </div>
+
+                {/* Product Sort Controls */}
+                <div style={{
+                  display: 'flex',
+                  gap: '16px',
+                  alignItems: 'end',
+                  marginBottom: '20px',
+                  flexWrap: 'wrap'
+                }}>
+                  {/* Sort By Selector */}
+                  <div style={{ minWidth: '200px' }}>
+                    <label style={{ 
+                      display: 'block', 
+                      fontSize: '14px', 
+                      fontWeight: '500', 
+                      marginBottom: '6px' 
+                    }}>
+                      Sort by
+                    </label>
+                    <select
+                      value={productSortBy}
+                      onChange={(e) => setProductSortBy(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '8px',
+                        fontSize: '14px',
+                        backgroundColor: 'white',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <option value="score">Reliability Score</option>
+                      <option value="name">Product Name</option>
+                      <option value="brand">Brand</option>
+                      <option value="status">Status</option>
+                      <option value="date">Date</option>
+                    </select>
+                  </div>
+
+                  {/* Sort Direction Toggle */}
+                  <div>
+                    <label style={{ 
+                      display: 'block', 
+                      fontSize: '14px', 
+                      fontWeight: '500', 
+                      marginBottom: '6px' 
+                    }}>
+                      Order
+                    </label>
+                    <button
+                      onClick={() => setProductSortDirection(productSortDirection === 'asc' ? 'desc' : 'asc')}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        padding: '12px 16px',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '8px',
+                        fontSize: '14px',
+                        backgroundColor: 'white',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                        minWidth: '140px'
+                      }}
+                      title={`Currently sorting ${productSortDirection === 'asc' ? 'ascending (low to high)' : 'descending (high to low)'}`}
+                    >
+                      {productSortDirection === 'asc' ? (
+                        <>
+                          <ArrowUp style={{ width: '16px', height: '16px' }} />
+                          <span>Low to High</span>
+                        </>
+                      ) : (
+                        <>
+                          <ArrowDown style={{ width: '16px', height: '16px' }} />
+                          <span>High to Low</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Results Summary */}
+                <div style={{ marginBottom: '16px', fontSize: '14px', color: '#6b7280' }}>
+                  Showing {searchResults.length} total products • 
+                  Sorted by {productSortBy.replace(/([A-Z])/g, ' $1').toLowerCase().replace(/^(\w)/, c => c.toUpperCase())} ({productSortDirection === 'asc' ? 'low to high' : 'high to low'})
                 </div>
 
                 {/* Pagination - Top */}
@@ -4134,7 +4373,7 @@ const CosmeticSafetyApp = () => {
                       marginBottom: '24px',
                       fontSize: '14px'
                     }}>
-                      These approved products in the same category have higher safety ratings:
+                      These approved products from different brands in the same category have higher safety ratings:
                     </p>
                     <div className="products-grid">
                       {alternativeProducts.map(product => (
