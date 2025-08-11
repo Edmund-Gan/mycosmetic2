@@ -1,11 +1,22 @@
 // Frontend database service that communicates with backend API
+// In production, use relative /api path. In development, use localhost:3001
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api';
+
+// For production on Vercel, if API_BASE_URL is relative, prepend the origin
+const getFullApiUrl = (endpoint) => {
+  if (API_BASE_URL.startsWith('/')) {
+    // Relative URL - use same origin (for production)
+    return `${window.location.origin}${API_BASE_URL}${endpoint}`;
+  }
+  // Absolute URL - use as is (for development)
+  return `${API_BASE_URL}${endpoint}`;
+};
 
 // Configuration logging
 console.log('Frontend API Configuration:');
 console.log('   API Base URL:', API_BASE_URL);
 console.log('   Frontend Origin:', window.location.origin);
-console.log('   Expected Backend:', 'http://localhost:3001');//
+console.log('   Environment:', import.meta.env.MODE);
 
 // Utility functions (keep these for compatibility)
 const calculateSimilarity = (str1, str2) => {
@@ -44,7 +55,8 @@ const apiRequest = async (endpoint, options = {}) => {
   try {
     console.log(`Making API request: ${endpoint}`);
     
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    const fullUrl = getFullApiUrl(endpoint);
+    const response = await fetch(fullUrl, {
       headers: {
         'Content-Type': 'application/json',
         ...options.headers
@@ -63,12 +75,19 @@ const apiRequest = async (endpoint, options = {}) => {
   } catch (error) {
     // Enhanced error messages for common issues
     if (error.message.includes('Failed to fetch') || error.name === 'TypeError') {
-      console.error(`Backend server not reachable at ${API_BASE_URL}`);
-      console.error('To fix this:');
-      console.error('   1. Make sure backend is running: npm run dev:backend');
-      console.error('   2. Check backend is on port 3001: http://localhost:3001/api/health');
-      console.error('   3. Or run both together: npm run dev:full');
-      throw new Error('Backend server not reachable. Please start the backend server.');
+      const fullUrl = getFullApiUrl(endpoint);
+      console.error(`Backend server not reachable at ${fullUrl}`);
+      
+      // Different messages for production vs development
+      if (import.meta.env.MODE === 'production') {
+        console.error('Backend API error in production. Please check server logs.');
+      } else {
+        console.error('To fix this:');
+        console.error('   1. Make sure backend is running: npm run dev:backend');
+        console.error('   2. Check backend is on port 3001: http://localhost:3001/api/health');
+        console.error('   3. Or run both together: npm run dev:full');
+      }
+      throw new Error('Backend server not reachable. Please check the server status.');
     }
     
     console.error(`API request failed for ${endpoint}:`, error);
