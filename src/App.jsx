@@ -45,24 +45,14 @@ const CosmeticSafetyApp = () => {
   
   // Filter states
   const [showFilters, setShowFilters] = useState(false);
-  const [filters, setFilters] = useState(() => {
-    // Load saved filter preferences from localStorage
-    try {
-      const savedFilters = localStorage.getItem('cosmeticGuard_filterPreferences');
-      if (savedFilters) {
-        return JSON.parse(savedFilters);
-      }
-    } catch (error) {
-      console.warn('Failed to load saved filter preferences:', error);
-    }
-    // Default filter values
-    return {
-      status: 'all', // 'all', 'approved', 'cancelled'
-      riskLevel: 'all', // 'all', 'low', 'medium', 'high'
-      category: 'all',
-      harmfulIngredients: 'all' // 'all', 'exclude', 'only'
-    };
+  const [filters, setFilters] = useState({
+    status: 'all', // 'all', 'approved', 'cancelled'
+    riskLevel: 'all', // 'all', 'low', 'medium', 'high'
+    category: 'all',
+    harmfulIngredients: 'all' // 'all', 'exclude', 'only'
   });
+  
+  const [filtersLoaded, setFiltersLoaded] = useState(false);
   
   // Search type state
   const [searchType, setSearchType] = useState('all'); // 'all', 'company', 'product', 'notification'
@@ -106,22 +96,6 @@ const CosmeticSafetyApp = () => {
   const [viewportWidth, setViewportWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1280);
   const [paginationStrategy, setPaginationStrategy] = useState('adaptive'); // 'fixed', 'adaptive', 'smart'
 
-  // Debug function to track score consistency
-  const debugScoreConsistency = () => {
-    console.log('=== SCORE CONSISTENCY CHECK ===');
-    console.log('Selected Product Score:', selectedProduct?.riskScore);
-    console.log('Status Modal Score:', statusModalData?.riskScore);
-    
-    if (selectedProduct && statusModalData) {
-      if (selectedProduct.riskScore !== statusModalData.riskScore) {
-        console.error('❌ SCORE MISMATCH DETECTED!');
-        console.log('Selected Product:', selectedProduct);
-        console.log('Status Modal Data:', statusModalData);
-      } else {
-        console.log('✅ Scores are consistent');
-      }
-    }
-  };
 
   // Load initial data
   useEffect(() => {
@@ -130,14 +104,44 @@ const CosmeticSafetyApp = () => {
     loadSearchHistory();
   }, []);
 
-  // Save filter preferences to localStorage whenever filters change
+  // Load filter preferences from localStorage after component mounts (client-side only)
   useEffect(() => {
+    try {
+      const savedFilters = localStorage.getItem('cosmeticGuard_filterPreferences');
+      if (savedFilters) {
+        const parsedFilters = JSON.parse(savedFilters);
+        setFilters(parsedFilters);
+      }
+    } catch (error) {
+      // Failed to load filter preferences - using defaults
+    }
+    setFiltersLoaded(true);
+  }, []);
+
+  // Save filter preferences to localStorage whenever filters change (only after initial load)
+  useEffect(() => {
+    if (!filtersLoaded) return; // Don't save during initial load
+    
     try {
       localStorage.setItem('cosmeticGuard_filterPreferences', JSON.stringify(filters));
     } catch (error) {
-      console.warn('Failed to save filter preferences:', error);
+      // Failed to save filter preferences
     }
-  }, [filters]);
+  }, [filters, filtersLoaded]);
+
+  // Auto-refilter existing search results when filters change
+  useEffect(() => {
+    if (!filtersLoaded) return; // Don't filter during initial load
+    
+    // Only refilter if we have existing search results
+    if (searchResults.length > 0 || unfilteredResultsCount > 0) {
+      // Get all unfiltered results by searching again with current query
+      if (searchQuery.trim()) {
+        handleSearch(searchQuery, false); // false = don't save to history again
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters, filtersLoaded]); // Only depend on filters and filtersLoaded to avoid infinite loops
 
   // Viewport tracking for responsive behavior
   useEffect(() => {
@@ -152,13 +156,16 @@ const CosmeticSafetyApp = () => {
       if (showSearchTypeDropdown && !event.target.closest('.search-type-dropdown')) {
         setShowSearchTypeDropdown(false);
       }
+      if (showSuggestions && !event.target.closest('.search-input-container')) {
+        setShowSuggestions(false);
+      }
     };
 
     document.addEventListener('mousedown', handleClickOutside);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showSearchTypeDropdown]);
+  }, [showSearchTypeDropdown, showSuggestions]);
 
   const loadInitialData = async () => {
     try {
@@ -168,7 +175,6 @@ const CosmeticSafetyApp = () => {
       // Clear product cache when loading new data
       if (productCache.current) {
         productCache.current.clear();
-        console.log('Product cache cleared');
       }
       
       const productsData = await cosmetics.getProducts();
@@ -188,7 +194,6 @@ const CosmeticSafetyApp = () => {
       setRecentApprovedProducts(recentApprovedData || []);
 
     } catch (err) {
-      console.error('Error loading initial data:', err);
       setError(`Failed to load data: ${err.message}`);
     } finally {
       setLoading(false);
@@ -210,7 +215,7 @@ const CosmeticSafetyApp = () => {
         setSearchHistory(JSON.parse(savedHistory));
       }
     } catch (error) {
-      console.warn('Failed to load search history:', error);
+      // Failed to load search history
     }
   };
 
@@ -235,7 +240,7 @@ const CosmeticSafetyApp = () => {
       try {
         localStorage.setItem('cosmeticGuard_searchHistory', JSON.stringify(updated));
       } catch (error) {
-        console.warn('Failed to save search history:', error);
+        // Failed to save search history
       }
       
       return updated;
@@ -248,7 +253,7 @@ const CosmeticSafetyApp = () => {
     try {
       localStorage.removeItem('cosmeticGuard_searchHistory');
     } catch (error) {
-      console.warn('Failed to clear search history:', error);
+      // Failed to clear search history
     }
   };
 
@@ -458,7 +463,6 @@ const CosmeticSafetyApp = () => {
           setSearchSuggestions(suggestions);
           setShowSuggestions(true);
         } catch (err) {
-          console.error('Suggestions failed:', err);
           setSearchSuggestions([]);
         }
       } else {
@@ -507,8 +511,9 @@ const CosmeticSafetyApp = () => {
   };
 
   // Main search function with search type support
-  const handleSearch = async () => {
-    if (!searchQuery.trim()) {
+  const handleSearch = async (query = searchQuery, saveToHistory = true) => {
+    const searchTerm = query.trim();
+    if (!searchTerm) {
       setSearchResults([]);
       setUnfilteredResultsCount(0);
       setCurrentPage(1);
@@ -521,18 +526,18 @@ const CosmeticSafetyApp = () => {
       setShowSuggestions(false);
       setCurrentPage(1);
       
-      let results = await cosmetics.searchProductsWithSubstances(searchQuery.trim());
+      let results = await cosmetics.searchProductsWithSubstances(searchTerm);
       
       // Apply search type filtering
       if (results && searchType !== 'all') {
         results = results.filter(product => {
           switch (searchType) {
             case 'company':
-              return product.company?.toLowerCase().includes(searchQuery.toLowerCase());
+              return product.company?.toLowerCase().includes(searchTerm.toLowerCase());
             case 'product':
-              return product.product?.toLowerCase().includes(searchQuery.toLowerCase());
+              return product.product?.toLowerCase().includes(searchTerm.toLowerCase());
             case 'notification':
-              return product.notif_no?.toLowerCase().includes(searchQuery.toLowerCase());
+              return product.notif_no?.toLowerCase().includes(searchTerm.toLowerCase());
             default:
               return true;
           }
@@ -549,11 +554,15 @@ const CosmeticSafetyApp = () => {
           setSearchResults(filteredResults);
           setSelectedProduct(null);
           // Save search to history
-          saveSearchToHistory(searchQuery.trim(), filteredResults.length);
+          if (saveToHistory) {
+            saveSearchToHistory(searchTerm, filteredResults.length);
+          }
         } else {
           setSearchResults([]);
           // Save search to history even if no results after filtering
-          saveSearchToHistory(searchQuery.trim(), 0);
+          if (saveToHistory) {
+            saveSearchToHistory(searchTerm, 0);
+          }
         }
       } else {
         setUnfilteredResultsCount(0);
@@ -561,7 +570,6 @@ const CosmeticSafetyApp = () => {
         setShowNoResultsModal(true);
       }
     } catch (err) {
-      console.error('Search failed:', err);
       setError(`Search failed: ${err.message}`);
     } finally {
       setLoading(false);
@@ -589,7 +597,6 @@ const CosmeticSafetyApp = () => {
         const alternatives = await cosmetics.getAlternativeProducts(product, 5);
         setAlternativeProducts(alternatives);
       } catch (err) {
-        console.error('Failed to load alternatives:', err);
         setAlternativeProducts([]);
       }
     } else {
@@ -612,19 +619,10 @@ const CosmeticSafetyApp = () => {
     const cacheKey = product.notif_no;
     if (productCache.current.has(cacheKey)) {
       productCache.current.delete(cacheKey);
-      console.log('Cleared cache for product:', cacheKey);
     }
     
     // Always format the clicked product to ensure we show the correct data
     const formattedProduct = formatProduct(product);
-    
-    console.log('Status modal for product:', product.notif_no, 'Score:', formattedProduct.riskScore);
-    console.log('Original product data:', {
-      notif_no: product.notif_no,
-      product: product.product,
-      status: product.status,
-      reliability_score: product.reliability_score
-    });
     
     setStatusModalData({
       product: formattedProduct,
@@ -633,9 +631,6 @@ const CosmeticSafetyApp = () => {
       harmfulIngredients: formattedProduct.harmfulIngredients
     });
     setShowStatusModal(true);
-    
-    // Debug check
-    setTimeout(debugScoreConsistency, 100);
   };
 
   // Product cache to ensure consistency
@@ -648,12 +643,6 @@ const CosmeticSafetyApp = () => {
     if (productCache.current.has(cacheKey)) {
       return productCache.current.get(cacheKey);
     }
-    
-    // Debug logging to track reliability score
-    console.log('Formatting product:', product.notif_no, {
-      reliability_score: product.reliability_score,
-      status: product.status
-    });
     
     // Calculate risk score with comprehensive field checking
     let riskScore = 0;
@@ -672,10 +661,8 @@ const CosmeticSafetyApp = () => {
     
     if (validScore !== undefined) {
       riskScore = Math.round(Number(validScore) * 10) / 10; // Round to 1 decimal place
-      console.log('Using database score:', riskScore, 'from field with value:', validScore);
     } else {
       // This should rarely happen if database always has reliability_score
-      console.warn('No valid reliability score found for product:', product.notif_no, 'using fallback');
       if (product.status?.toLowerCase() === 'approved') {
         riskScore = 80.0; // Fixed fallback for approved
       } else if (product.status?.toLowerCase() === 'cancelled') {
@@ -711,7 +698,6 @@ const CosmeticSafetyApp = () => {
     }
     productCache.current.set(cacheKey, formatted);
     
-    console.log('Formatted product score:', riskScore);
     return formatted;
   };
 
@@ -1098,6 +1084,16 @@ const CosmeticSafetyApp = () => {
     return JSON.stringify(filters) !== JSON.stringify(defaultFilters);
   };
 
+  // Count active filters
+  const getActiveFilterCount = () => {
+    let count = 0;
+    if (filters.status !== 'all') count++;
+    if (filters.riskLevel !== 'all') count++;
+    if (filters.category !== 'all') count++;
+    if (filters.harmfulIngredients !== 'all') count++;
+    return count;
+  };
+
   // Filter component
   const FilterComponent = () => {
     if (!showFilters) return null;
@@ -1294,7 +1290,7 @@ const CosmeticSafetyApp = () => {
                     try {
                       localStorage.removeItem('cosmeticGuard_filterPreferences');
                     } catch (error) {
-                      console.warn('Failed to clear filter preferences:', error);
+                      // Failed to clear filter preferences
                     }
                     setFilters({
                       status: 'all',
@@ -1343,18 +1339,6 @@ const CosmeticSafetyApp = () => {
             Showing <strong>{startIndex + 1}-{endIndex}</strong> of <strong>{searchResults.length}</strong> results
           </span>
           
-          {/* Strategy indicator */}
-          {paginationStrategy !== 'fixed' && (
-            <div style={{ 
-              marginTop: 'var(--spacing-xs)', 
-              fontSize: 'var(--font-xs)', 
-              fontStyle: 'italic',
-              color: '#6366f1'
-            }}>
-              {paginationStrategy === 'adaptive' && `Adapted for screen size`}
-              {paginationStrategy === 'smart' && `Optimized ${actualItemsPerPage} per page`}
-            </div>
-          )}
         </div>
 
         {/* Pagination controls */}
@@ -1421,11 +1405,8 @@ const CosmeticSafetyApp = () => {
     // Calculate score breakdown using real database data
     const calculateScoreBreakdown = async (product) => {
       if (!product) {
-        console.log('No product data provided to calculateScoreBreakdown');
         return null;
       }
-
-      console.log('Calculating score breakdown for product:', product);
       
       // Try to get actual breakdown data from Result table
       try {
@@ -1433,7 +1414,6 @@ const CosmeticSafetyApp = () => {
         const breakdown = await cosmetics.getScoreBreakdownWithFallback(productBrand);
         
         if (breakdown) {
-          console.log('Found actual breakdown data:', breakdown);
           
           // Get the bonuses/penalties value from database
           const bonusPenaltyValue = breakdown.bonuses_penalties || 0;
@@ -1536,14 +1516,12 @@ const CosmeticSafetyApp = () => {
             }
           }
 
-          console.log('Database breakdown result:', result);
           return result;
         } else {
           // Fallback to calculated breakdown if no database data
           return createFallbackBreakdown(product);
         }
       } catch (error) {
-        console.error('Error fetching score breakdown:', error);
         return createFallbackBreakdown(product);
       }
     };
@@ -2659,19 +2637,6 @@ const CosmeticSafetyApp = () => {
             {error && <ErrorMessage message={error} onRetry={loadInitialData} />}
             
             {/* Debug console note */}
-            {(loading || error) && (
-              <div style={{ 
-                backgroundColor: '#eff6ff', 
-                border: '1px solid #bfdbfe', 
-                borderRadius: '8px', 
-                padding: '12px', 
-                margin: '16px 0',
-                fontSize: '14px',
-                color: '#1e40af'
-              }}>
-                Check the browser console (F12) for detailed debugging information
-              </div>
-            )}
           </div>
         </div>
       )}
@@ -2778,7 +2743,7 @@ const CosmeticSafetyApp = () => {
                   }}>
                     Search All Fields (English/Bahasa Malaysia)
                   </label>
-                  <div style={{ position: 'relative' }}>
+                  <div style={{ position: 'relative' }} className="search-input-container">
                     <Search style={{
                       position: 'absolute',
                       left: '16px',
@@ -2853,7 +2818,10 @@ const CosmeticSafetyApp = () => {
                 <div style={{ display: 'flex', gap: '12px', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                     <button
-                      onClick={handleSearch}
+                      onClick={() => {
+                        setCurrentPage(1);
+                        handleSearch();
+                      }}
                       disabled={loading}
                       style={{
                         backgroundColor: loading ? '#9ca3af' : '#9333ea',
@@ -2886,9 +2854,9 @@ const CosmeticSafetyApp = () => {
                     <button
                       onClick={() => setShowFilters(!showFilters)}
                       style={{
-                        backgroundColor: showFilters ? '#9333ea' : 'white',
+                        backgroundColor: showFilters ? '#9333ea' : (getActiveFilterCount() > 0 ? '#f3f4f6' : 'white'),
                         color: showFilters ? 'white' : '#6b7280',
-                        border: '1px solid #d1d5db',
+                        border: `1px solid ${getActiveFilterCount() > 0 ? '#9333ea' : '#d1d5db'}`,
                         padding: '12px 16px',
                         borderRadius: '8px',
                         cursor: 'pointer',
@@ -2896,11 +2864,29 @@ const CosmeticSafetyApp = () => {
                         display: 'flex',
                         alignItems: 'center',
                         gap: '6px',
-                        transition: 'all 0.2s ease'
+                        transition: 'all 0.2s ease',
+                        position: 'relative'
                       }}
                     >
                       <Filter style={{ width: '16px', height: '16px' }} />
                       Filters
+                      {getActiveFilterCount() > 0 && (
+                        <span style={{
+                          backgroundColor: showFilters ? 'rgba(255, 255, 255, 0.2)' : '#9333ea',
+                          color: showFilters ? 'white' : 'white',
+                          fontSize: '12px',
+                          padding: '2px 6px',
+                          borderRadius: '10px',
+                          minWidth: '18px',
+                          height: '18px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontWeight: '600'
+                        }}>
+                          {getActiveFilterCount()}
+                        </span>
+                      )}
                     </button>
                   </div>
                   
@@ -2941,9 +2927,6 @@ const CosmeticSafetyApp = () => {
                     )}
                   </button>
                 </div>
-                
-                {/* Filter Component */}
-                <FilterComponent />
                 
                 {/* Search History - displayed right below search bar */}
                 {showSearchHistory && (
@@ -3038,6 +3021,60 @@ const CosmeticSafetyApp = () => {
                     )}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Filter Component */}
+            <FilterComponent />
+
+            {/* No results due to filters message */}
+            {searchResults.length === 0 && searchQuery && !loading && !error && 
+             (filters.status !== 'all' || filters.riskLevel !== 'all' || filters.category !== 'all' || filters.harmfulIngredients !== 'all') && 
+             unfilteredResultsCount > 0 && (
+              <div style={{
+                backgroundColor: '#fef3c7',
+                border: '1px solid #fcd34d',
+                borderRadius: '8px',
+                padding: '16px',
+                margin: '16px 0',
+                textAlign: 'center'
+              }}>
+                <p style={{ color: '#92400e', marginBottom: '8px' }}>
+                  Found {unfilteredResultsCount} product{unfilteredResultsCount !== 1 ? 's' : ''}, but none matched your current filters.
+                </p>
+                <p style={{ color: '#92400e', marginBottom: '12px', fontSize: '14px' }}>
+                  Current filters: 
+                  {filters.status !== 'all' && ` Status: ${filters.status}`}
+                  {filters.riskLevel !== 'all' && ` | Risk: ${filters.riskLevel}`}
+                  {filters.category !== 'all' && ` | Category: ${filters.category}`}
+                  {filters.harmfulIngredients !== 'all' && ` | Ingredients: ${filters.harmfulIngredients}`}
+                </p>
+                <p style={{ color: '#92400e', marginBottom: '12px', fontSize: '14px' }}>
+                  Try adjusting your filter settings or clearing all filters to see more results.
+                </p>
+                <button 
+                  onClick={() => {
+                    setFilters({
+                      status: 'all',
+                      riskLevel: 'all',
+                      category: 'all',
+                      harmfulIngredients: 'all'
+                    });
+                    setCurrentPage(1); // Reset pagination
+                    setTimeout(() => handleSearch(), 100);
+                  }}
+                  style={{
+                    backgroundColor: '#d97706',
+                    color: 'white',
+                    border: 'none',
+                    padding: '8px 16px',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '14px'
+                  }}
+                >
+                  Clear All Filters
+                </button>
               </div>
             )}
 
@@ -3579,62 +3616,8 @@ const CosmeticSafetyApp = () => {
         {/* Search Tab - Content Only (Search bar is handled above) */}
         {activeTab === 'search' && !showSavedAlternatives && (
           <div>
-            {/* Filter Component */}
-            <FilterComponent />
-
             {/* Loading state */}
             {loading && <LoadingSpinner />}
-
-            {/* No results due to filters message */}
-            {searchResults.length === 0 && searchQuery && !loading && !error && 
-             (filters.status !== 'all' || filters.riskLevel !== 'all' || filters.category !== 'all' || filters.harmfulIngredients !== 'all') && 
-             unfilteredResultsCount > 0 && (
-              <div style={{
-                backgroundColor: '#fef3c7',
-                border: '1px solid #fcd34d',
-                borderRadius: '8px',
-                padding: '16px',
-                margin: '16px 0',
-                textAlign: 'center'
-              }}>
-                <p style={{ color: '#92400e', marginBottom: '8px' }}>
-                  Found {unfilteredResultsCount} product{unfilteredResultsCount !== 1 ? 's' : ''}, but none matched your current filters.
-                </p>
-                <p style={{ color: '#92400e', marginBottom: '12px', fontSize: '14px' }}>
-                  Current filters: 
-                  {filters.status !== 'all' && ` Status: ${filters.status}`}
-                  {filters.riskLevel !== 'all' && ` | Risk: ${filters.riskLevel}`}
-                  {filters.category !== 'all' && ` | Category: ${filters.category}`}
-                  {filters.harmfulIngredients !== 'all' && ` | Ingredients: ${filters.harmfulIngredients}`}
-                </p>
-                <p style={{ color: '#92400e', marginBottom: '12px', fontSize: '14px' }}>
-                  Try adjusting your filter settings or clearing all filters to see more results.
-                </p>
-                <button 
-                  onClick={() => {
-                    setFilters({
-                      status: 'all',
-                      riskLevel: 'all',
-                      category: 'all',
-                      harmfulIngredients: 'all'
-                    });
-                    setCurrentPage(1); // Reset pagination
-                    setTimeout(() => handleSearch(), 100);
-                  }}
-                  style={{
-                    backgroundColor: '#d97706',
-                    color: 'white',
-                    border: 'none',
-                    padding: '8px 16px',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontSize: '14px'
-                  }}
-                >
-                  Clear All Filters
-                </button>
-              </div>
-            )}
 
             {/* Search Results with Pagination */}
             {searchResults.length > 0 && !selectedProduct && !loading && (

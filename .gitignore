@@ -30,3 +30,6 @@ dist-ssr
 .env.production
 .env.production.local
 backend/.env
+
+# Claude Code documentation
+CLAUDE.md

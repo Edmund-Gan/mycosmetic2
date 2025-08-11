@@ -7,9 +7,6 @@ import dotenv from 'dotenv';
 // In production (Vercel), use environment variables from dashboard
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config();
-  console.log('Loading environment variables from .env file (development mode)');
-} else {
-  console.log('Using environment variables from Vercel dashboard (production mode)');
 }
 
 const app = express();
@@ -28,16 +25,15 @@ const pool = new Pool({
 
 // Test connection on startup
 pool.on('connect', () => {
-  console.log('Connected to NeonBase PostgreSQL database');
+  // Connected to database
 });
 
 pool.on('error', (err) => {
   console.error('Database pool error:', err);
 });
 
-// Middleware - Request logging and flexible CORS for development
+// Middleware - flexible CORS for development
 app.use((req, res, next) => {
-  console.log(`${req.method} ${req.path} - Origin: ${req.get('Origin') || 'No origin'}`);
   next();
 });
 
@@ -48,17 +44,14 @@ app.use(cors({
     
     // Allow all localhost origins in development
     if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
-      console.log('CORS: Localhost origin allowed:', origin);
       return callback(null, true);
     }
     
     // Allow Vercel domains in production
     if (origin.includes('vercel.app') || origin.includes('vercel.com')) {
-      console.log('CORS: Vercel origin allowed:', origin);
       return callback(null, true);
     }
     
-    console.warn('CORS: Origin not allowed:', origin);
     return callback(null, false);
   },
   credentials: true,
@@ -66,8 +59,6 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
 }));
-console.log('CORS configured for all localhost origins');
-console.log('Note: In production, configure specific allowed origins\n');
 
 app.use(express.json());
 
@@ -159,8 +150,6 @@ app.get('/api/health', (req, res) => {
 app.get('/api/products', async (req, res) => {
   const client = await pool.connect();
   try {
-    console.log('Fetching products (limited for performance)...');
-    
     const result = await client.query(`
       SELECT p.notif_no, p.date_notif, p.status, p.product, p.category,
              c.company_name as company, c.reliability_score
@@ -170,7 +159,6 @@ app.get('/api/products', async (req, res) => {
       LIMIT 10000
     `);
     
-    console.log('Products fetched:', result.rows?.length, 'records');
     res.json(result.rows);
   } catch (err) {
     console.error('getProducts failed:', err);
@@ -190,8 +178,6 @@ app.get('/api/search/realtime', async (req, res) => {
 
   const client = await pool.connect();
   try {
-    console.log('Real-time search for:', query);
-    
     const expandedTerms = expandSearchQuery(query);
     
     // Build parameters array first
@@ -232,7 +218,6 @@ app.get('/api/search/realtime', async (req, res) => {
       .filter(item => item.similarity > 0.1)
       .sort((a, b) => b.similarity - a.similarity);
     
-    console.log('Real-time search completed:', filteredResults.length, 'results');
     res.json(filteredResults);
   } catch (err) {
     console.error('Real-time search failed:', err);
@@ -252,7 +237,6 @@ app.get('/api/search/enhanced', async (req, res) => {
 
   const client = await pool.connect();
   try {
-    console.log('Enhanced search for:', query);
     
     // Get search results directly from database (instead of HTTP call)
     const expandedTerms = expandSearchQuery(query);
@@ -283,7 +267,6 @@ app.get('/api/search/enhanced', async (req, res) => {
     `, params);
     
     if (!result.rows || result.rows.length === 0) {
-      console.log('No products found for query:', query);
       return res.json([]);
     }
     
@@ -313,7 +296,6 @@ app.get('/api/search/enhanced', async (req, res) => {
               manufacturer: cancelledResult.rows[0]?.manufacturer
             };
           } catch (err) {
-            console.warn(`No cancelled product info for ${product.notif_no}`);
             return {
               ...product,
               harmful_ingredients: []
@@ -327,7 +309,6 @@ app.get('/api/search/enhanced', async (req, res) => {
       })
     );
     
-    console.log('Enhanced search completed:', enhancedProducts.length, 'results');
     res.json(enhancedProducts);
   } catch (error) {
     console.error('Enhanced search failed:', error);
@@ -356,7 +337,6 @@ app.get('/api/alternatives/:notifNo', async (req, res) => {
     }
     
     const originalProduct = originalResult.rows[0];
-    console.log('Finding alternatives for:', originalProduct.product);
     
     const result = await client.query(`
       SELECT p.notif_no, p.date_notif, p.status, p.product, p.category,
@@ -370,7 +350,6 @@ app.get('/api/alternatives/:notifNo', async (req, res) => {
       LIMIT $3
     `, [originalProduct.category, notifNo, parseInt(limit)]);
     
-    console.log('Alternative products found:', result.rows?.length, 'records');
     res.json(result.rows);
   } catch (err) {
     console.error('getAlternativeProducts failed:', err);
