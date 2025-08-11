@@ -6,7 +6,7 @@ import dotenv from 'dotenv';
 // Load environment variables only in development
 // In production (Vercel), use environment variables from dashboard
 if (process.env.NODE_ENV !== 'production') {
-  dotenv.config();
+  dotenv.config({ path: '../.env' });
 }
 
 const app = express();
